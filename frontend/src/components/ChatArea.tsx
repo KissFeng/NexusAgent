@@ -25,7 +25,6 @@ import {
   Copy,
   Check,
   RefreshCw,
-  Shield,
 } from 'lucide-react';
 
 interface ChatAreaProps {
@@ -40,16 +39,11 @@ interface ChatAreaProps {
   models: ModelConfig[];
   selectedModelId: string | null;
   skills: Skill[];
-  memoryCount?: number;
   onSelectModel: (id: string) => void;
   onSendMessage: (content: string) => void;
   onStopStreaming: () => void;
-  onOpenModelConfig: () => void;
-  onOpenKnowledgeBase: () => void;
-  onOpenSkills: () => void;
-  onOpenTools: () => void;
-  onOpenMemories: () => void;
-  onOpenGovernance: () => void;
+  onNavigateToPlaza?: () => void;
+  onNavigateToSettings?: () => void;
   onApproveAction: (approved: boolean) => void;
 }
 
@@ -393,16 +387,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   models,
   selectedModelId,
   skills,
-  memoryCount,
   onSelectModel,
   onSendMessage,
   onStopStreaming,
-  onOpenModelConfig,
-  onOpenKnowledgeBase,
-  onOpenSkills,
-  onOpenTools,
-  onOpenMemories,
-  onOpenGovernance,
+  onNavigateToPlaza,
+  onNavigateToSettings,
   onApproveAction,
 }) => {
   const [input, setInput] = useState('');
@@ -507,110 +496,78 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           )}
         </div>
 
-        <div className="flex items-center gap-2">
-          {/* 技能中心快捷入口 */}
-          <button
-            onClick={onOpenSkills}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800/60 hover:bg-slate-700/60 border border-slate-700/60 text-xs text-slate-300 hover:text-white transition-all cursor-pointer"
-            title="技能中心 (Slash Commands)"
-          >
-            <Zap className="w-3.5 h-3.5 text-amber-400" />
-            <span>技能 ({skills.filter((s) => s.is_enabled).length})</span>
-          </button>
-
-          {/* 工具生态快捷入口 */}
-          <button
-            onClick={onOpenTools}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800/60 hover:bg-slate-700/60 border border-slate-700/60 text-xs text-slate-300 hover:text-white transition-all cursor-pointer"
-            title="工具生态 (内置搜索沙箱与外部 MCP)"
-          >
-            <Wrench className="w-3.5 h-3.5 text-sky-400" />
-            <span>工具箱</span>
-          </button>
-
-          {/* 知识库快捷入口 */}
-          <button
-            onClick={onOpenKnowledgeBase}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800/60 hover:bg-slate-700/60 border border-slate-700/60 text-xs text-slate-300 hover:text-white transition-all cursor-pointer"
-            title="知识库 RAG 检索"
-          >
-            <BookOpen className="w-3.5 h-3.5 text-indigo-400" />
-            <span>知识库</span>
-          </button>
-
-          {/* 长期记忆快捷入口 */}
-          <button
-            onClick={onOpenMemories}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800/60 hover:bg-slate-700/60 border border-slate-700/60 text-xs text-slate-300 hover:text-white transition-all cursor-pointer"
-            title="用户画像与长期记忆"
-          >
-            <Brain className="w-3.5 h-3.5 text-purple-400" />
-            <span>记忆 ({memoryCount || 0})</span>
-          </button>
-
-          {/* 系统运营治理与调度快捷入口 */}
-          <button
-            onClick={onOpenGovernance}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-indigo-950/40 hover:bg-indigo-900/50 border border-indigo-500/30 text-xs text-indigo-300 hover:text-white transition-all cursor-pointer"
-            title="系统治理、用量监控、自动化定时与外部渠道"
-          >
-            <Shield className="w-3.5 h-3.5 text-indigo-400" />
-            <span>运营治理</span>
-          </button>
+        <div className="flex items-center gap-2.5">
+          {/* 快捷跳转到广场 */}
+          {onNavigateToPlaza && (
+            <button
+              onClick={onNavigateToPlaza}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-indigo-950/40 hover:bg-indigo-900/50 border border-indigo-500/20 text-xs text-indigo-300 hover:text-white transition-all cursor-pointer"
+              title="探索 MCP 服务与专业技能广场"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+              <span>生态广场</span>
+            </button>
+          )}
 
           {/* 模型选择器 */}
           <div className="relative">
             <button
               onClick={() => setShowModelDropdown(!showModelDropdown)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700/80 border border-slate-700/80 text-xs font-medium text-slate-200 transition-all cursor-pointer"
+              className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700/80 border border-slate-700 text-xs font-medium text-slate-200 transition-all cursor-pointer shadow-sm"
             >
               <Cpu className="w-3.5 h-3.5 text-indigo-400" />
-              <span className="truncate max-w-[130px] font-mono">
+              <span className="truncate max-w-[140px] font-mono">
                 {selectedModel?.name || '选择模型'}
               </span>
               <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
             </button>
 
             {showModelDropdown && (
-              <div className="absolute right-0 mt-1.5 w-60 rounded-xl bg-slate-900 border border-slate-800 shadow-2xl py-1.5 z-50">
-                <div className="px-3 py-1 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-                  切换对话模型
+              <div className="absolute right-0 mt-1.5 w-64 rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl py-1.5 z-50 animate-in fade-in zoom-in-95 duration-100">
+                <div className="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-800/80 flex items-center justify-between">
+                  <span>切换推理模型</span>
+                  <span className="text-[9px] text-slate-500 font-mono">按会话生效</span>
                 </div>
-                {models.map((m) => (
-                  <button
-                    key={m.id}
-                    onClick={() => {
-                      onSelectModel(m.id);
-                      setShowModelDropdown(false);
-                    }}
-                    className={`w-full flex items-center justify-between px-3 py-2 text-xs transition-colors cursor-pointer ${
-                      selectedModelId === m.id
-                        ? 'bg-indigo-600/20 text-indigo-400 font-medium'
-                        : 'text-slate-300 hover:bg-slate-800'
-                    }`}
-                  >
-                    <div className="flex flex-col text-left min-w-0">
-                      <span className="truncate">{m.name}</span>
-                      <span className="text-[10px] text-slate-500 font-mono">{m.model_name}</span>
-                    </div>
-                    {m.is_default && (
-                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                        默认
-                      </span>
-                    )}
-                  </button>
-                ))}
+                <div className="max-h-60 overflow-y-auto p-1 space-y-0.5">
+                  {models.map((m) => (
+                    <button
+                      key={m.id}
+                      onClick={() => {
+                        onSelectModel(m.id);
+                        setShowModelDropdown(false);
+                      }}
+                      className={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
+                        selectedModelId === m.id
+                          ? 'bg-indigo-600/20 text-indigo-300 font-medium'
+                          : 'text-slate-300 hover:bg-slate-800/80'
+                      }`}
+                    >
+                      <div className="flex flex-col text-left min-w-0 pr-2">
+                        <span className="truncate">{m.name}</span>
+                        <span className="text-[10px] text-slate-500 font-mono truncate">{m.model_name}</span>
+                      </div>
+                      {m.is_default && (
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 shrink-0">
+                          默认
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
           </div>
 
-          <button
-            onClick={onOpenModelConfig}
-            className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer"
-            title="配置模型与密钥"
-          >
-            <Settings className="w-3.5 h-3.5" />
-          </button>
+          {/* 快捷进入设置 */}
+          {onNavigateToSettings && (
+            <button
+              onClick={onNavigateToSettings}
+              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700/80 border border-slate-700 text-slate-400 hover:text-white transition-colors cursor-pointer"
+              title="系统设置 (模型/MCP/技能/频道/定时任务)"
+            >
+              <Settings className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
       </header>
 

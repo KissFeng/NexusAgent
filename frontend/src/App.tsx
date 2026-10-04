@@ -8,16 +8,28 @@ import {
   streamChat,
   streamResumeApproval,
 } from './api/client';
-import type { User, Workspace, ModelConfig, Conversation, Message, Citation, PendingApproval, Skill, ToolConfig, Memory, ToolCallEvent } from './types';
+import type {
+  User,
+  Workspace,
+  ModelConfig,
+  Conversation,
+  Message,
+  Citation,
+  PendingApproval,
+  Skill,
+  ToolConfig,
+  Memory,
+  ToolCallEvent,
+  KnowledgeBase,
+} from './types';
 import { AuthModal } from './components/AuthModal';
-import { Sidebar } from './components/Sidebar';
+import { LeftRail, type MainNavTab } from './components/layout/LeftRail';
+import { SubSidebar, type SettingsSubTab, type PlazaCategory } from './components/layout/SubSidebar';
 import { ChatArea } from './components/ChatArea';
-import { ModelConfigModal } from './components/ModelConfigModal';
-import { KnowledgeBaseModal } from './components/KnowledgeBaseModal';
-import { SkillModal } from './components/SkillModal';
-import { ToolModal } from './components/ToolModal';
-import { MemoryModal } from './components/MemoryModal';
-import { GovernanceModal } from './components/GovernanceModal';
+import { PlazaView } from './components/plaza/PlazaView';
+import { KnowledgeBaseView } from './components/knowledge/KnowledgeBaseView';
+import { MemoryView } from './components/memory/MemoryView';
+import { SettingsView } from './components/settings/SettingsView';
 
 interface StreamingSession {
   conversationId: string;
@@ -42,19 +54,21 @@ export default function App() {
   const activeConversationIdRef = useRef<string | null>(activeConversationId);
   activeConversationIdRef.current = activeConversationId;
 
+  // 主导航与子侧边栏模式 (Cherry Studio 经典架构)
+  const [activeMainTab, setActiveMainTab] = useState<MainNavTab>('chat');
+  const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsSubTab>('model');
+  const [plazaCategory, setPlazaCategory] = useState<PlazaCategory>('all');
+  const [plazaTagFilter, setPlazaTagFilter] = useState<string | null>(null);
+
+  // 知识库状态
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
+  const [selectedKbId, setSelectedKbId] = useState<string | null>(null);
+
   // 会话隔离：按 conversationId 维护消息缓存与流式 Session
   const [messagesByConv, setMessagesByConv] = useState<Record<string, Message[]>>({});
   const [streamingSessions, setStreamingSessions] = useState<Record<string, StreamingSession>>({});
 
-  // Modals
-  const [isModelModalOpen, setIsModelModalOpen] = useState(false);
-  const [isKbModalOpen, setIsKbModalOpen] = useState(false);
-  const [isSkillModalOpen, setIsSkillModalOpen] = useState(false);
-  const [isToolModalOpen, setIsToolModalOpen] = useState(false);
-  const [isMemoryModalOpen, setIsMemoryModalOpen] = useState(false);
-  const [isGovernanceModalOpen, setIsGovernanceModalOpen] = useState(false);
-
-  // Skills, Tools & Memories
+  // Skills, MCP Tools & Memories
   const [skills, setSkills] = useState<Skill[]>([]);
   const [tools, setTools] = useState<ToolConfig[]>([]);
   const [memories, setMemories] = useState<Memory[]>([]);
@@ -102,18 +116,24 @@ export default function App() {
 
   const loadWorkspaceResources = async () => {
     try {
-      const [modelList, convList, skillList, toolList, memList] = await Promise.all([
+      const [modelList, convList, skillList, toolList, memList, kbList] = await Promise.all([
         api.listModels(),
         api.listConversations(),
         api.listSkills().catch(() => [] as Skill[]),
         api.listTools().catch(() => [] as ToolConfig[]),
         api.listMemories().catch(() => [] as Memory[]),
+        api.listKnowledgeBases().catch(() => [] as KnowledgeBase[]),
       ]);
       setModels(modelList);
       setConversations(convList);
       setSkills(skillList);
       setTools(toolList);
       setMemories(memList);
+      setKnowledgeBases(kbList);
+
+      if (kbList.length > 0 && !selectedKbId) {
+        setSelectedKbId(kbList[0].id);
+      }
 
       const defaultModel = modelList.find((m) => m.is_default) || modelList[0];
       if (defaultModel) {
@@ -160,14 +180,14 @@ export default function App() {
         }
       })
       .catch((err) => {
-        if (!isCancelled) console.error('Failed to load messages:', err);
+        console.error('Failed to load messages for conversation:', activeConversationId, err);
       });
+
     return () => {
       isCancelled = true;
     };
   }, [activeConversationId]);
 
-  // Handlers
   const handleSelectWorkspace = (ws: Workspace) => {
     Object.values(streamingSessions).forEach((s) => s.controller?.abort());
     setStreamingSessions({});
@@ -178,436 +198,313 @@ export default function App() {
 
   const handleCreateWorkspace = async (name: string) => {
     try {
-      const newWs = await api.createWorkspace({ name, type: 'enterprise' });
+      const created = await api.createWorkspace({ name, type: 'enterprise' });
       await loadWorkspaces();
-      handleSelectWorkspace(newWs);
-    } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : '创建工作空间失败');
+      handleSelectWorkspace(created);
+    } catch (err) {
+      alert('创建工作空间失败');
     }
   };
 
   const handleNewConversation = () => {
-    setActiveConversationId(null);
+    const draftId = `draft-${Date.now()}`;
+    const newDraft: Conversation = {
+      id: draftId,
+      workspace_id: currentWorkspace?.id || '',
+      user_id: user?.id || '',
+      model_config_id: selectedModelId || undefined,
+      title: '新对话',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    setConversations((prev) => [newDraft, ...prev]);
+    setActiveConversationId(draftId);
+    setMessagesByConv((prev) => ({
+      ...prev,
+      [draftId]: [],
+    }));
+    setActiveMainTab('chat');
   };
 
   const handleDeleteConversation = async (id: string) => {
-    try {
-      if (streamingSessions[id]?.controller) {
-        streamingSessions[id].controller.abort();
-      }
+    if (streamingSessions[id]?.controller) {
+      streamingSessions[id].controller.abort();
       setStreamingSessions((prev) => {
         const next = { ...prev };
         delete next[id];
         return next;
       });
+    }
+
+    if (id.startsWith('draft-')) {
+      const remaining = conversations.filter((c) => c.id !== id);
+      setConversations(remaining);
       setMessagesByConv((prev) => {
         const next = { ...prev };
         delete next[id];
         return next;
       });
+      if (activeConversationId === id) {
+        setActiveConversationId(remaining.length > 0 ? remaining[0].id : null);
+      }
+      return;
+    }
 
+    if (!confirm('确定删除该会话记录吗？')) return;
+    try {
       await api.deleteConversation(id);
       const remaining = conversations.filter((c) => c.id !== id);
       setConversations(remaining);
+      setMessagesByConv((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
       if (activeConversationId === id) {
-        if (remaining.length > 0) {
-          setActiveConversationId(remaining[0].id);
-        } else {
-          handleNewConversation();
-        }
+        setActiveConversationId(remaining.length > 0 ? remaining[0].id : null);
       }
-    } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : '删除失败');
+    } catch (err) {
+      alert('删除失败');
     }
   };
 
+  // 5. Send message
   const handleSendMessage = async (content: string) => {
-    const convId = activeConversationId || `draft-${Date.now()}`;
-    if (streamingSessions[convId]?.isStreaming) return;
+    if (!content.trim() || !activeConversationId) return;
 
-    const tempUserMessage: Message = {
+    const convId = activeConversationId;
+    let actualConvId = convId;
+
+    if (convId.startsWith('draft-')) {
+      try {
+        const created = await api.createConversation(
+          content.slice(0, 30),
+          selectedModelId || undefined
+        );
+        actualConvId = created.id;
+        setConversations((prev) =>
+          prev.map((c) => (c.id === convId ? created : c))
+        );
+        setActiveConversationId(actualConvId);
+        setMessagesByConv((prev) => {
+          const draftMsgs = prev[convId] || [];
+          const next = { ...prev };
+          delete next[convId];
+          next[actualConvId] = draftMsgs;
+          return next;
+        });
+      } catch (err) {
+        alert('创建持久化会话失败');
+        return;
+      }
+    }
+
+    const tempUserMsg: Message = {
       id: `temp-${Date.now()}`,
-      conversation_id: convId,
+      conversation_id: actualConvId,
       role: 'user',
       content,
       token_count: 0,
       created_at: new Date().toISOString(),
     };
 
-    if (!activeConversationId) {
-      setActiveConversationId(convId);
-      activeConversationIdRef.current = convId;
-    }
-
     setMessagesByConv((prev) => ({
       ...prev,
-      [convId]: [...(prev[convId] || []), tempUserMessage],
+      [actualConvId]: [...(prev[actualConvId] || []), tempUserMsg],
     }));
 
-    const controller = new AbortController();
-
+    const abortController = new AbortController();
     setStreamingSessions((prev) => ({
       ...prev,
-      [convId]: {
-        conversationId: convId,
+      [actualConvId]: {
+        conversationId: actualConvId,
         isStreaming: true,
         content: '',
         thinking: '',
         toolCalls: [],
         citations: [],
         pendingApproval: null,
-        controller,
+        controller: abortController,
       },
     }));
 
-    let targetConvId = convId;
-
-    await streamChat({
-      conversationId: activeConversationId && !activeConversationId.startsWith('draft-') ? activeConversationId : undefined,
+    streamChat({
+      conversationId: actualConvId,
       content,
       modelConfigId: selectedModelId || undefined,
-      signal: controller.signal,
-      onStart: ({ conversation_id, title }) => {
-        if (targetConvId !== conversation_id) {
-          const oldDraftId = targetConvId;
-          targetConvId = conversation_id;
-
-          if (activeConversationIdRef.current === oldDraftId) {
-            setActiveConversationId(conversation_id);
-            activeConversationIdRef.current = conversation_id;
-          }
-
-          setMessagesByConv((prev) => {
-            const msgs = prev[oldDraftId] || [];
-            const next = { ...prev };
-            delete next[oldDraftId];
-            next[conversation_id] = msgs.map((m) =>
-              m.conversation_id === oldDraftId ? { ...m, conversation_id } : m
+      signal: abortController.signal,
+      onThinkingChunk: (chunk: string) => {
+        setStreamingSessions((prev) => {
+          const session = prev[actualConvId];
+          if (!session) return prev;
+          return {
+            ...prev,
+            [actualConvId]: {
+              ...session,
+              thinking: session.thinking + chunk,
+            },
+          };
+        });
+      },
+      onChunk: (chunk: string) => {
+        setStreamingSessions((prev) => {
+          const session = prev[actualConvId];
+          if (!session) return prev;
+          return {
+            ...prev,
+            [actualConvId]: {
+              ...session,
+              content: session.content + chunk,
+            },
+          };
+        });
+      },
+      onToolCall: (event) => {
+        setStreamingSessions((prev) => {
+          const session = prev[actualConvId];
+          if (!session) return prev;
+          const existing = session.toolCalls.find((t) => t.tool_id === event.tool_id);
+          let nextToolCalls = session.toolCalls;
+          if (existing) {
+            nextToolCalls = session.toolCalls.map((t) =>
+              t.tool_id === event.tool_id ? { ...t, ...event } : t
             );
-            return next;
-          });
-
-          setStreamingSessions((prev) => {
-            const session = prev[oldDraftId];
-            const next = { ...prev };
-            delete next[oldDraftId];
-            next[conversation_id] = session
-              ? { ...session, conversationId: conversation_id }
-              : {
-                  conversationId: conversation_id,
-                  isStreaming: true,
-                  content: '',
-                  thinking: '',
-                  toolCalls: [],
-                  citations: [],
-                  pendingApproval: null,
-                  controller,
-                };
-            return next;
-          });
-        }
-
-        setConversations((prev) => {
-          if (!prev.some((c) => c.id === conversation_id)) {
-            return [
-              {
-                id: conversation_id,
-                workspace_id: currentWorkspace?.id || '',
-                user_id: user?.id || '',
-                title,
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-              },
-              ...prev,
-            ];
-          }
-          return prev;
-        });
-      },
-      onChunk: (chunk) => {
-        setStreamingSessions((prev) => {
-          const current = prev[targetConvId];
-          if (!current) return prev;
-          return {
-            ...prev,
-            [targetConvId]: {
-              ...current,
-              content: current.content + chunk,
-            },
-          };
-        });
-      },
-      onThinkingChunk: (chunk) => {
-        setStreamingSessions((prev) => {
-          const current = prev[targetConvId];
-          if (!current) return prev;
-          return {
-            ...prev,
-            [targetConvId]: {
-              ...current,
-              thinking: current.thinking + chunk,
-            },
-          };
-        });
-      },
-      onToolCall: (tc) => {
-        setStreamingSessions((prev) => {
-          const current = prev[targetConvId];
-          if (!current) return prev;
-          const existingIdx = current.toolCalls.findIndex((t) => t.tool_id === tc.tool_id);
-          let nextTools: ToolCallEvent[];
-          if (existingIdx >= 0) {
-            nextTools = [...current.toolCalls];
-            nextTools[existingIdx] = { ...nextTools[existingIdx], ...tc };
           } else {
-            nextTools = [...current.toolCalls, { ...tc, timestamp: Date.now() }];
+            nextToolCalls = [...session.toolCalls, event];
           }
           return {
             ...prev,
-            [targetConvId]: {
-              ...current,
-              toolCalls: nextTools,
+            [actualConvId]: {
+              ...session,
+              toolCalls: nextToolCalls,
             },
           };
         });
       },
-      onToolResult: (tr) => {
+      onCitation: (newCitation: Citation) => {
         setStreamingSessions((prev) => {
-          const current = prev[targetConvId];
-          if (!current) return prev;
-          const existingIdx = current.toolCalls.findIndex((t) => t.tool_id === tr.tool_id);
-          let nextTools: ToolCallEvent[];
-          if (existingIdx >= 0) {
-            nextTools = [...current.toolCalls];
-            nextTools[existingIdx] = {
-              ...nextTools[existingIdx],
-              status: 'completed',
-              content: tr.content,
-            };
-          } else {
-            nextTools = [
-              ...current.toolCalls,
-              {
-                tool_id: tr.tool_id || `tool-${Date.now()}`,
-                tool_name: tr.tool_name || 'Tool',
-                status: 'completed',
-                content: tr.content,
-                timestamp: Date.now(),
-              },
-            ];
-          }
+          const session = prev[actualConvId];
+          if (!session) return prev;
           return {
             ...prev,
-            [targetConvId]: {
-              ...current,
-              toolCalls: nextTools,
+            [actualConvId]: {
+              ...session,
+              citations: [...session.citations, newCitation],
             },
           };
         });
       },
-      onCitation: (citation) => {
+      onApprovalRequired: (approval: PendingApproval) => {
         setStreamingSessions((prev) => {
-          const current = prev[targetConvId];
-          if (!current) return prev;
-          if (current.citations.some((c) => c.point_id === citation.point_id)) {
-            return prev;
-          }
+          const session = prev[actualConvId];
+          if (!session) return prev;
           return {
             ...prev,
-            [targetConvId]: {
-              ...current,
-              citations: [...current.citations, citation],
-            },
-          };
-        });
-      },
-      onApprovalRequired: (approval) => {
-        setStreamingSessions((prev) => {
-          const current = prev[targetConvId];
-          if (!current) return prev;
-          return {
-            ...prev,
-            [targetConvId]: {
-              ...current,
+            [actualConvId]: {
+              ...session,
               pendingApproval: approval,
             },
           };
         });
       },
-      onError: (err) => {
-        console.error(`Chat error in conversation [${targetConvId}]:`, err);
-        setStreamingSessions((prev) => {
-          const current = prev[targetConvId];
-          if (!current) return prev;
-          return {
+      onDone: async () => {
+        try {
+          const updatedMsgs = await api.getMessages(actualConvId);
+          setMessagesByConv((prev) => ({
             ...prev,
-            [targetConvId]: {
-              ...current,
-              isStreaming: false,
-            },
-          };
-        });
-      },
-      onDone: async (finalConvId) => {
-        const actualId = finalConvId || targetConvId;
-
-        let citationsToAttach: Citation[] = [];
-        setStreamingSessions((prev) => {
-          const current = prev[actualId] || prev[targetConvId];
-          if (current) {
-            citationsToAttach = current.citations;
-          }
-          if (!current) return prev;
-          return {
-            ...prev,
-            [actualId]: {
-              ...current,
-              isStreaming: false,
-            },
-          };
-        });
-
-        if (actualId) {
-          try {
-            const updatedMsgs = await api.getMessages(actualId);
-            if (citationsToAttach.length > 0 && updatedMsgs.length > 0) {
-              const lastAssistant = [...updatedMsgs].reverse().find((m) => m.role === 'assistant');
-              if (lastAssistant) {
-                lastAssistant.citations = [...citationsToAttach];
-              }
-            }
-            setMessagesByConv((prev) => ({
-              ...prev,
-              [actualId]: updatedMsgs,
-            }));
-          } catch (e) {
-            console.error('Failed to reload messages onDone:', e);
-          }
+            [actualConvId]: updatedMsgs,
+          }));
+        } catch (e) {
+          console.error('Failed to reload messages onDone:', e);
         }
 
         setStreamingSessions((prev) => {
           const next = { ...prev };
-          delete next[actualId];
-          if (actualId !== targetConvId) delete next[targetConvId];
+          delete next[actualConvId];
           return next;
         });
 
+        // 重新拉取会话列表以刷新最后消息
         api.listConversations().then(setConversations).catch(console.error);
+        api.listMemories().then(setMemories).catch(console.error);
+      },
+      onError: (err) => {
+        alert(err);
+        setStreamingSessions((prev) => {
+          const next = { ...prev };
+          delete next[actualConvId];
+          return next;
+        });
       },
     });
   };
 
-  const handleApproveAction = async (approved: boolean) => {
+  // 6. Approve action
+  const handleApproveAction = (approved: boolean) => {
+    if (!activeConversationId) return;
     const convId = activeConversationId;
-    if (!convId) return;
+    const session = streamingSessions[convId];
+    if (!session || !session.pendingApproval) return;
 
-    const controller = new AbortController();
+    const abortController = new AbortController();
 
-    setStreamingSessions((prev) => {
-      const current = prev[convId];
-      return {
-        ...prev,
-        [convId]: {
-          conversationId: convId,
-          isStreaming: true,
-          content: '',
-          thinking: '',
-          toolCalls: current?.toolCalls || [],
-          citations: current?.citations || [],
-          pendingApproval: null,
-          controller,
-        },
-      };
-    });
+    setStreamingSessions((prev) => ({
+      ...prev,
+      [convId]: {
+        ...session,
+        isStreaming: true,
+        pendingApproval: null,
+        controller: abortController,
+      },
+    }));
 
-    await streamResumeApproval({
+    streamResumeApproval({
       conversationId: convId,
       approved,
-      modelConfigId: selectedModelId || undefined,
-      onChunk: (chunk) => {
+      onThinkingChunk: (chunk: string) => {
         setStreamingSessions((prev) => {
-          const current = prev[convId];
-          if (!current) return prev;
-          return {
-            ...prev,
-            [convId]: {
-              ...current,
-              content: current.content + chunk,
-            },
-          };
+          const s = prev[convId];
+          if (!s) return prev;
+          return { ...prev, [convId]: { ...s, thinking: s.thinking + chunk } };
         });
       },
-      onThinkingChunk: (chunk) => {
+      onChunk: (chunk: string) => {
         setStreamingSessions((prev) => {
-          const current = prev[convId];
-          if (!current) return prev;
-          return {
-            ...prev,
-            [convId]: {
-              ...current,
-              thinking: current.thinking + chunk,
-            },
-          };
+          const s = prev[convId];
+          if (!s) return prev;
+          return { ...prev, [convId]: { ...s, content: s.content + chunk } };
         });
       },
-      onToolCall: (tc) => {
+      onToolCall: (event) => {
         setStreamingSessions((prev) => {
-          const current = prev[convId];
-          if (!current) return prev;
-          return {
-            ...prev,
-            [convId]: {
-              ...current,
-              toolCalls: [...current.toolCalls, { ...tc, timestamp: Date.now() }],
-            },
-          };
-        });
-      },
-      onToolResult: (tr) => {
-        setStreamingSessions((prev) => {
-          const current = prev[convId];
-          if (!current) return prev;
-          const updated = current.toolCalls.map((t) =>
-            t.tool_id === tr.tool_id ? { ...t, status: 'completed' as const, content: tr.content } : t
-          );
-          return {
-            ...prev,
-            [convId]: {
-              ...current,
-              toolCalls: updated,
-            },
-          };
-        });
-      },
-      onDone: async (finalConvId) => {
-        const actualId = finalConvId || convId;
-        setStreamingSessions((prev) => {
-          const current = prev[actualId];
-          if (!current) return prev;
-          return {
-            ...prev,
-            [actualId]: {
-              ...current,
-              isStreaming: false,
-            },
-          };
-        });
-
-        if (actualId) {
-          try {
-            const updatedMsgs = await api.getMessages(actualId);
-            setMessagesByConv((prev) => ({
-              ...prev,
-              [actualId]: updatedMsgs,
-            }));
-          } catch (e) {
-            console.error('Failed to reload messages on approval done:', e);
+          const s = prev[convId];
+          if (!s) return prev;
+          const existing = s.toolCalls.find((t) => t.tool_id === event.tool_id);
+          let nextToolCalls = s.toolCalls;
+          if (existing) {
+            nextToolCalls = s.toolCalls.map((t) =>
+              t.tool_id === event.tool_id ? { ...t, ...event } : t
+            );
+          } else {
+            nextToolCalls = [...s.toolCalls, event];
           }
+          return { ...prev, [convId]: { ...s, toolCalls: nextToolCalls } };
+        });
+      },
+      onDone: async () => {
+        try {
+          const updatedMsgs = await api.getMessages(convId);
+          setMessagesByConv((prev) => ({
+            ...prev,
+            [convId]: updatedMsgs,
+          }));
+        } catch (e) {
+          console.error('Failed to reload messages on approval done:', e);
         }
 
         setStreamingSessions((prev) => {
           const next = { ...prev };
-          delete next[actualId];
+          delete next[convId];
           return next;
         });
       },
@@ -657,96 +554,126 @@ export default function App() {
   const currentPendingApproval = currentSession?.pendingApproval || null;
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-slate-950 font-sans antialiased text-slate-100">
-      <Sidebar
+    <div className="flex h-screen w-screen overflow-hidden bg-slate-950 font-sans antialiased text-slate-100 select-none">
+      {/* 1. 最左侧主导航 Rail (宽 60px) */}
+      <LeftRail
         user={user}
-        workspaces={workspaces}
         currentWorkspace={currentWorkspace}
+        workspaces={workspaces}
+        activeTab={activeMainTab}
+        onSelectTab={(tab) => setActiveMainTab(tab)}
         onSelectWorkspace={handleSelectWorkspace}
         onCreateWorkspace={handleCreateWorkspace}
+        onLogout={handleLogout}
+        streamingCount={
+          Object.keys(streamingSessions).filter((id) => streamingSessions[id]?.isStreaming).length
+        }
+      />
+
+      {/* 2. 二级侧边栏 Pane (宽 250px) */}
+      <SubSidebar
+        activeMainTab={activeMainTab}
+        currentWorkspace={currentWorkspace}
+        // Chat 相关
         conversations={conversations}
         activeConversationId={activeConversationId}
-        onSelectConversation={(id) => setActiveConversationId(id)}
+        onSelectConversation={(id) => {
+          setActiveConversationId(id);
+          setActiveMainTab('chat');
+        }}
         onNewConversation={handleNewConversation}
         onDeleteConversation={handleDeleteConversation}
-        onLogout={handleLogout}
         streamingConversationIds={Object.keys(streamingSessions).filter(
           (id) => streamingSessions[id]?.isStreaming
         )}
-      />
-
-      <ChatArea
-        currentConversation={conversations.find((c) => c.id === activeConversationId) || null}
-        messages={currentMessages}
-        streamingContent={currentStreamingContent}
-        streamingThinking={currentSession?.thinking || ''}
-        streamingToolCalls={currentSession?.toolCalls || []}
-        streamingCitations={currentStreamingCitations}
-        pendingApproval={currentPendingApproval}
-        isStreaming={currentIsStreaming}
-        models={models}
-        selectedModelId={selectedModelId}
-        skills={skills}
-        memoryCount={memories.length}
-        onSelectModel={(id) => setSelectedModelId(id)}
-        onSendMessage={handleSendMessage}
-        onStopStreaming={handleStopStreaming}
-        onOpenModelConfig={() => setIsModelModalOpen(true)}
-        onOpenKnowledgeBase={() => setIsKbModalOpen(true)}
-        onOpenSkills={() => setIsSkillModalOpen(true)}
-        onOpenTools={() => setIsToolModalOpen(true)}
-        onOpenMemories={() => setIsMemoryModalOpen(true)}
-        onOpenGovernance={() => setIsGovernanceModalOpen(true)}
-        onApproveAction={handleApproveAction}
-      />
-
-      <ModelConfigModal
-        isOpen={isModelModalOpen}
-        onClose={() => setIsModelModalOpen(false)}
-        models={models}
-        onRefresh={() => {
-          api.listModels().then(setModels);
+        // Plaza 相关
+        plazaCategory={plazaCategory}
+        onSelectPlazaCategory={setPlazaCategory}
+        plazaTagFilter={plazaTagFilter}
+        onSelectPlazaTagFilter={setPlazaTagFilter}
+        // Knowledge 相关
+        knowledgeBases={knowledgeBases}
+        selectedKbId={selectedKbId}
+        onSelectKb={(id) => {
+          setSelectedKbId(id);
+          setActiveMainTab('knowledge');
+        }}
+        onCreateKb={() => setActiveMainTab('knowledge')}
+        // Settings 相关
+        activeSettingsTab={activeSettingsTab}
+        onSelectSettingsTab={(tab) => {
+          setActiveSettingsTab(tab);
+          setActiveMainTab('settings');
         }}
       />
 
-      <KnowledgeBaseModal
-        isOpen={isKbModalOpen}
-        onClose={() => setIsKbModalOpen(false)}
-      />
+      {/* 3. 主工作区 View (自适应 flex-1) */}
+      <main className="flex-1 h-full min-w-0 overflow-hidden bg-slate-950">
+        {activeMainTab === 'chat' && (
+          <ChatArea
+            currentConversation={conversations.find((c) => c.id === activeConversationId) || null}
+            messages={currentMessages}
+            streamingContent={currentStreamingContent}
+            streamingThinking={currentSession?.thinking || ''}
+            streamingToolCalls={currentSession?.toolCalls || []}
+            streamingCitations={currentStreamingCitations}
+            pendingApproval={currentPendingApproval}
+            isStreaming={currentIsStreaming}
+            models={models}
+            selectedModelId={selectedModelId}
+            skills={skills}
+            onSelectModel={(id) => setSelectedModelId(id)}
+            onSendMessage={handleSendMessage}
+            onStopStreaming={handleStopStreaming}
+            onNavigateToPlaza={() => setActiveMainTab('plaza')}
+            onNavigateToSettings={() => setActiveMainTab('settings')}
+            onApproveAction={handleApproveAction}
+          />
+        )}
 
-      <SkillModal
-        isOpen={isSkillModalOpen}
-        onClose={() => setIsSkillModalOpen(false)}
-        skills={skills}
-        onRefresh={() => {
-          api.listSkills().then(setSkills).catch(console.error);
-        }}
-      />
+        {activeMainTab === 'plaza' && (
+          <PlazaView
+            currentCategory={plazaCategory}
+            tagFilter={plazaTagFilter}
+            installedTools={tools}
+            installedSkills={skills}
+            onRefreshTools={() => api.listTools().then(setTools)}
+            onRefreshSkills={() => api.listSkills().then(setSkills)}
+          />
+        )}
 
-      <ToolModal
-        isOpen={isToolModalOpen}
-        onClose={() => setIsToolModalOpen(false)}
-        tools={tools}
-        onRefresh={() => {
-          api.listTools().then(setTools).catch(console.error);
-        }}
-      />
+        {activeMainTab === 'knowledge' && (
+          <KnowledgeBaseView
+            knowledgeBases={knowledgeBases}
+            selectedKbId={selectedKbId}
+            onRefreshKbs={() => api.listKnowledgeBases().then(setKnowledgeBases)}
+          />
+        )}
 
-      <MemoryModal
-        isOpen={isMemoryModalOpen}
-        onClose={() => setIsMemoryModalOpen(false)}
-        memories={memories}
-        onRefresh={() => {
-          api.listMemories().then(setMemories).catch(console.error);
-        }}
-      />
+        {activeMainTab === 'memory' && (
+          <MemoryView
+            memories={memories}
+            onRefresh={() => api.listMemories().then(setMemories)}
+          />
+        )}
 
-      <GovernanceModal
-        isOpen={isGovernanceModalOpen}
-        onClose={() => setIsGovernanceModalOpen(false)}
-        models={models}
-        skills={skills}
-      />
+        {activeMainTab === 'settings' && (
+          <SettingsView
+            activeTab={activeSettingsTab}
+            onNavigateToPlaza={(cat) => {
+              setPlazaCategory(cat);
+              setActiveMainTab('plaza');
+            }}
+            onNavigateToKnowledge={() => setActiveMainTab('knowledge')}
+            models={models}
+            onRefreshModels={() => api.listModels().then(setModels)}
+            skills={skills}
+            onRefreshSkills={() => api.listSkills().then(setSkills)}
+            tools={tools}
+            onRefreshTools={() => api.listTools().then(setTools)}
+          />
+        )}
+      </main>
     </div>
   );
 }
