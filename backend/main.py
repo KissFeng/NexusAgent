@@ -12,14 +12,28 @@ from app.api.v1.knowledge import router as knowledge_router
 from app.api.v1.skills import router as skills_router
 from app.api.v1.tools import router as tools_router
 from app.api.v1.memories import router as memories_router
+from app.api.v1.schedules import router as schedules_router
+from app.api.v1.governance import router as governance_router
+from app.api.v1.webhooks import router as webhooks_router
+from app.services.scheduler_service import SchedulerService
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 启动时自动初始化数据表
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # 启动定时任务引擎并恢复已有任务
+    SchedulerService.start_scheduler()
+    try:
+        await SchedulerService.load_all_jobs_from_db()
+    except Exception as e:
+        print(f"Warning: load_all_jobs_from_db error: {e}")
+
     yield
-    # 关闭时清理引擎
+
+    # 关闭定时任务引擎与数据库引擎
+    SchedulerService.shutdown_scheduler()
     await engine.dispose()
 
 app = FastAPI(
@@ -48,6 +62,9 @@ app.include_router(knowledge_router, prefix=settings.API_V1_STR)
 app.include_router(skills_router, prefix=settings.API_V1_STR)
 app.include_router(tools_router, prefix=settings.API_V1_STR)
 app.include_router(memories_router, prefix=settings.API_V1_STR)
+app.include_router(schedules_router, prefix=settings.API_V1_STR)
+app.include_router(governance_router, prefix=settings.API_V1_STR)
+app.include_router(webhooks_router, prefix=settings.API_V1_STR)
 
 @app.get("/health")
 async def health_check():

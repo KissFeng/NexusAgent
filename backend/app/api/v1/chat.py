@@ -1,5 +1,6 @@
 import json
 import asyncio
+import time
 from typing import Annotated, List, Optional, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -24,6 +25,8 @@ from app.api.deps import get_current_user, get_current_workspace
 from app.agent.graph import create_agent_graph
 from app.services.skill_service import SkillService
 from app.services.memory_service import MemoryService
+from app.services.usage_service import UsageService
+from app.services.audit_service import AuditService
 
 router = APIRouter(prefix="", tags=["Chat & Agent"])
 
@@ -170,6 +173,10 @@ async def chat_stream(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     workspace, _ = ws_info
+
+    # 0. 工作空间 Token 配额预检
+    await UsageService.check_quota(workspace.id, db)
+    stream_start_time = time.time()
 
     # 1. 查找或创建会话
     conversation_id = req.conversation_id
@@ -357,6 +364,7 @@ async def chat_stream(
             persisted_content = f"<think>\n{raw_thinking}\n</think>\n\n{final_answer}"
 
         if persisted_content:
+            latency_ms = int((time.time() - stream_start_time) * 1000)
             async with AsyncSessionLocal() as session:
                 assistant_msg = Message(
                     conversation_id=conversation_id,
@@ -365,6 +373,31 @@ async def chat_stream(
                 )
                 session.add(assistant_msg)
                 await session.commit()
+
+                # 记录 Token 消耗度量与企业合规审计日志
+                prompt_tokens = max(len(req.content) // 2, 5)
+                completion_tokens = max(len(persisted_content) // 2, 5)
+                model_name = model_config.model_name if model_config else "default"
+
+                await UsageService.record_usage(
+                    db=session,
+                    workspace_id=workspace.id,
+                    user_id=user.id,
+                    conversation_id=conversation_id,
+                    model_name=model_name,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    latency_ms=latency_ms,
+                )
+                await AuditService.log_action(
+                    db=session,
+                    workspace_id=workspace.id,
+                    user_id=user.id,
+                    action="chat.message",
+                    resource_type="conversation",
+                    resource_id=conversation_id,
+                    details={"model": model_name, "latency_ms": latency_ms, "tokens": prompt_tokens + completion_tokens},
+                )
 
             if model_config and model_config.api_key:
                 # 异步后台提炼与沉淀长期记忆 (非阻塞执行)
@@ -412,6 +445,17 @@ async def approve_action(
         ModelConfig.workspace_id == workspace.id
     ).order_by(ModelConfig.is_default.desc())
     model_config = (await db.execute(m_stmt)).scalars().first()
+
+    # 记录审批操作审计日志
+    await AuditService.log_action(
+        db=db,
+        workspace_id=workspace.id,
+        user_id=user.id,
+        action="approval.decision",
+        resource_type="conversation",
+        resource_id=req.conversation_id,
+        details={"approved": req.approved, "reason": req.reason},
+    )
 
     graph = create_agent_graph(model_config, workspace.id)
     config = {"configurable": {"thread_id": req.conversation_id}}

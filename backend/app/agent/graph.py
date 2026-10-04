@@ -201,7 +201,8 @@ def create_agent_graph(model_config: ModelConfig, workspace_id: str):
             "3. 当需要精确数学计算、数据处理或运行脚本时，使用 code_interpreter 执行 Python 代码；\n"
             "4. 如果用户要求执行敏感管理动作，调用 execute_sensitive_action 工具触发审批；\n"
             "5. 当任务庞大、涉及深度调研、编写测试或安全评审时，主动调用 delegate_subtask 将子任务委派给专门的子智能体分工完成；\n"
-            "6. 当需要使用空间配置的外部 MCP (Model Context Protocol) 协议服务时，调用 call_mcp_tool 远程执行工具。"
+            "6. 当需要使用空间配置的外部 MCP (Model Context Protocol) 协议服务时，调用 call_mcp_tool 远程执行工具；\n"
+            "7. 当用户要求将消息、简报或分析成果发送/推送到飞书群、企业微信群或外部 Webhook 机器人时，使用 call_mcp_tool (server_url='http://127.0.0.1:8000/api/v1/tools/mcp-webhooks', tool_name='send_channel_message', arguments={'content': '...'}) 完成实时推流。"
         )
 
         # 检查是否激活专业技能 (Skill)

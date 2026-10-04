@@ -7,6 +7,7 @@ from app.models.knowledge import KnowledgeBase, Document, DocumentChunk
 from app.models.skill import Skill
 from app.models.tool import ToolConfig
 from app.models.memory import Memory
+from app.models.governance import WebhookConfig, ScheduledTask, TokenUsage, AuditLog
 
 __all__ = [
     "Base",
@@ -22,4 +23,8 @@ __all__ = [
     "Skill",
     "ToolConfig",
     "Memory",
+    "WebhookConfig",
+    "ScheduledTask",
+    "TokenUsage",
+    "AuditLog",
 ]

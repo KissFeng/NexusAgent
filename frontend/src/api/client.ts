@@ -12,6 +12,10 @@ import type {
   ToolConfig,
   Memory,
   ToolCallEvent,
+  ScheduledTask,
+  WebhookConfig,
+  UsageSummary,
+  AuditLog,
 } from '../types';
 
 const BASE_URL = '/api/v1';
@@ -286,6 +290,81 @@ export const api = {
   deleteMemory: (id: string) =>
     request<{ message: string }>(`/memories/${id}`, {
       method: 'DELETE',
+    }),
+
+  // Schedules (Cron Tasks)
+  listSchedules: () => request<ScheduledTask[]>('/schedules'),
+  createSchedule: (data: {
+    name: string;
+    cron_expression: string;
+    prompt: string;
+    model_config_id?: string;
+    skill_code?: string;
+    channel_type?: string;
+    target_id?: string;
+    is_enabled?: boolean;
+  }) =>
+    request<ScheduledTask>('/schedules', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateSchedule: (id: string, data: Partial<ScheduledTask>) =>
+    request<ScheduledTask>(`/schedules/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteSchedule: (id: string) =>
+    request<{ message: string }>(`/schedules/${id}`, {
+      method: 'DELETE',
+    }),
+  triggerSchedule: (id: string) =>
+    request<{ success: boolean; content?: string; latency_ms?: number; error?: string }>(`/schedules/${id}/trigger`, {
+      method: 'POST',
+    }),
+
+  // Governance & Usage Analytics
+  getUsageOverview: (days = 30) => request<UsageSummary>(`/governance/usage?days=${days}`),
+  updateQuota: (token_quota_monthly: number) =>
+    request<{ message: string; token_quota_monthly: number }>('/governance/quota', {
+      method: 'PUT',
+      body: JSON.stringify({ token_quota_monthly }),
+    }),
+  getAuditLogs: (params?: { action_filter?: string; limit?: number; offset?: number }) => {
+    const query = new URLSearchParams();
+    if (params?.action_filter) query.set('action_filter', params.action_filter);
+    if (params?.limit) query.set('limit', String(params.limit));
+    if (params?.offset) query.set('offset', String(params.offset));
+    return request<{ total: number; items: AuditLog[] }>(`/governance/audit-logs?${query.toString()}`);
+  },
+
+  // External Webhooks
+  listWebhooks: () => request<WebhookConfig[]>('/governance/webhooks'),
+  createWebhook: (data: {
+    name: string;
+    channel_type: string;
+    app_id?: string;
+    app_secret?: string;
+    verification_token?: string;
+    encrypt_key?: string;
+    webhook_url?: string;
+    is_active?: boolean;
+  }) =>
+    request<{ id: string; name: string; callback_url: string; message: string }>('/governance/webhooks', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateWebhook: (id: string, data: Partial<WebhookConfig> & { app_secret?: string; encrypt_key?: string }) =>
+    request<{ message: string }>(`/governance/webhooks/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteWebhook: (id: string) =>
+    request<{ message: string }>(`/governance/webhooks/${id}`, {
+      method: 'DELETE',
+    }),
+  testWebhook: (id: string) =>
+    request<{ success: boolean; message: string }>(`/governance/webhooks/${id}/test`, {
+      method: 'POST',
     }),
 };
 

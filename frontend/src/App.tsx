@@ -17,6 +17,7 @@ import { KnowledgeBaseModal } from './components/KnowledgeBaseModal';
 import { SkillModal } from './components/SkillModal';
 import { ToolModal } from './components/ToolModal';
 import { MemoryModal } from './components/MemoryModal';
+import { GovernanceModal } from './components/GovernanceModal';
 
 interface StreamingSession {
   conversationId: string;
@@ -51,6 +52,7 @@ export default function App() {
   const [isSkillModalOpen, setIsSkillModalOpen] = useState(false);
   const [isToolModalOpen, setIsToolModalOpen] = useState(false);
   const [isMemoryModalOpen, setIsMemoryModalOpen] = useState(false);
+  const [isGovernanceModalOpen, setIsGovernanceModalOpen] = useState(false);
 
   // Skills, Tools & Memories
   const [skills, setSkills] = useState<Skill[]>([]);
@@ -694,6 +696,7 @@ export default function App() {
         onOpenSkills={() => setIsSkillModalOpen(true)}
         onOpenTools={() => setIsToolModalOpen(true)}
         onOpenMemories={() => setIsMemoryModalOpen(true)}
+        onOpenGovernance={() => setIsGovernanceModalOpen(true)}
         onApproveAction={handleApproveAction}
       />
 
@@ -736,6 +739,13 @@ export default function App() {
         onRefresh={() => {
           api.listMemories().then(setMemories).catch(console.error);
         }}
+      />
+
+      <GovernanceModal
+        isOpen={isGovernanceModalOpen}
+        onClose={() => setIsGovernanceModalOpen(false)}
+        models={models}
+        skills={skills}
       />
     </div>
   );

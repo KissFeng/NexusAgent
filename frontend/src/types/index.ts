@@ -148,3 +148,77 @@ export interface Memory {
   created_at: string;
   updated_at: string;
 }
+
+export interface ScheduledTask {
+  id: string;
+  workspace_id: string;
+  creator_id?: string;
+  name: string;
+  cron_expression: string;
+  prompt: string;
+  model_config_id?: string;
+  skill_code?: string;
+  channel_type: 'internal' | 'feishu' | 'wecom';
+  target_id?: string;
+  is_enabled: boolean;
+  last_run_at?: string;
+  last_status?: 'success' | 'failed' | 'running';
+  last_error?: string;
+  created_at: string;
+}
+
+export interface WebhookConfig {
+  id: string;
+  workspace_id: string;
+  name: string;
+  channel_type: 'feishu' | 'wecom';
+  app_id?: string;
+  has_app_secret?: boolean;
+  verification_token?: string;
+  has_encrypt_key?: boolean;
+  webhook_url?: string;
+  is_active: boolean;
+  callback_url: string;
+  created_at?: string;
+}
+
+export interface UsageSummary {
+  quota_monthly: number;
+  quota_used_tokens: number;
+  quota_percentage: number;
+  today: {
+    tokens: number;
+    cost: number;
+    calls: number;
+  };
+  this_month: {
+    tokens: number;
+    cost: number;
+    calls: number;
+  };
+  model_distribution: Array<{
+    model_name: string;
+    tokens: number;
+    cost: number;
+    calls: number;
+  }>;
+  daily_trends: Array<{
+    date: string;
+    tokens: number;
+    cost: number;
+    calls: number;
+  }>;
+}
+
+export interface AuditLog {
+  id: string;
+  action: string;
+  resource_type: string;
+  resource_id?: string;
+  user_id?: string;
+  ip_address?: string;
+  status: string;
+  details?: string;
+  created_at?: string;
+}
+

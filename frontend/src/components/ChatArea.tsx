@@ -25,6 +25,7 @@ import {
   Copy,
   Check,
   RefreshCw,
+  Shield,
 } from 'lucide-react';
 
 interface ChatAreaProps {
@@ -48,6 +49,7 @@ interface ChatAreaProps {
   onOpenSkills: () => void;
   onOpenTools: () => void;
   onOpenMemories: () => void;
+  onOpenGovernance: () => void;
   onApproveAction: (approved: boolean) => void;
 }
 
@@ -400,6 +402,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onOpenSkills,
   onOpenTools,
   onOpenMemories,
+  onOpenGovernance,
   onApproveAction,
 }) => {
   const [input, setInput] = useState('');
@@ -543,6 +546,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           >
             <Brain className="w-3.5 h-3.5 text-purple-400" />
             <span>记忆 ({memoryCount || 0})</span>
+          </button>
+
+          {/* 系统运营治理与调度快捷入口 */}
+          <button
+            onClick={onOpenGovernance}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-indigo-950/40 hover:bg-indigo-900/50 border border-indigo-500/30 text-xs text-indigo-300 hover:text-white transition-all cursor-pointer"
+            title="系统治理、用量监控、自动化定时与外部渠道"
+          >
+            <Shield className="w-3.5 h-3.5 text-indigo-400" />
+            <span>运营治理</span>
           </button>
 
           {/* 模型选择器 */}
