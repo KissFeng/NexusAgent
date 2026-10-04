@@ -272,7 +272,9 @@ async def chat_stream(
         }
 
         full_content = []
+        full_thinking = []
         emitted_citations = set()
+        emitted_tool_calls = set()
 
         try:
             # 流式监听图执行过程中的事件
@@ -280,6 +282,15 @@ async def chat_stream(
                 mode, payload = event
                 if mode == "messages":
                     chunk, meta = payload
+
+                    # 1. 检查模型是否有 thinking / reasoning 流 (DeepSeek-R1, SiliconFlow, 兼容端点)
+                    if hasattr(chunk, "additional_kwargs") and chunk.additional_kwargs:
+                        reasoning_delta = chunk.additional_kwargs.get("reasoning_content")
+                        if reasoning_delta:
+                            full_thinking.append(str(reasoning_delta))
+                            yield f"data: {json.dumps({'type': 'thinking_chunk', 'content': str(reasoning_delta)}, ensure_ascii=False)}\n\n"
+
+                    # 2. 检查普通消息 Token
                     if isinstance(chunk, AIMessage) and chunk.content:
                         text = extract_message_text(chunk.content)
                         if text:
@@ -287,9 +298,23 @@ async def chat_stream(
                             yield f"data: {json.dumps({'type': 'chunk', 'content': text}, ensure_ascii=False)}\n\n"
 
                 elif mode == "updates":
-                    # 检查是否有工具返回的引用信息
+                    # 3. 检查智能体是否发起了工具调用
+                    if "agent" in payload:
+                        agent_data = payload["agent"]
+                        for m in agent_data.get("messages", []):
+                            if hasattr(m, "tool_calls") and m.tool_calls:
+                                for tc in m.tool_calls:
+                                    t_id = tc.get("id") or f"{tc.get('name')}-{len(emitted_tool_calls)}"
+                                    if t_id not in emitted_tool_calls:
+                                        emitted_tool_calls.add(t_id)
+                                        yield f"data: {json.dumps({'type': 'tool_call', 'tool_id': t_id, 'tool_name': tc.get('name'), 'args': tc.get('args', {}), 'status': 'running'}, ensure_ascii=False)}\n\n"
+
+                    # 4. 检查工具节点执行结果
                     if "tools" in payload:
                         tool_data = payload["tools"]
+                        for tm in tool_data.get("messages", []):
+                            yield f"data: {json.dumps({'type': 'tool_result', 'tool_id': getattr(tm, 'tool_call_id', None), 'tool_name': getattr(tm, 'name', None), 'content': str(tm.content), 'status': 'completed'}, ensure_ascii=False)}\n\n"
+
                         citations = tool_data.get("citations", [])
                         for c in citations:
                             point_id = c.get("point_id")
@@ -323,14 +348,20 @@ async def chat_stream(
             full_content.append(err_tip)
             yield f"data: {json.dumps({'type': 'error', 'error': str(e)}, ensure_ascii=False)}\n\n"
 
-        # 持久化最终的 assistant 回复
+        # 持久化最终的 assistant 回复 (若有思考过程则整合持久化)
         final_answer = "".join(full_content).strip()
-        if final_answer:
+        raw_thinking = "".join(full_thinking).strip()
+
+        persisted_content = final_answer
+        if raw_thinking and "<think>" not in final_answer:
+            persisted_content = f"<think>\n{raw_thinking}\n</think>\n\n{final_answer}"
+
+        if persisted_content:
             async with AsyncSessionLocal() as session:
                 assistant_msg = Message(
                     conversation_id=conversation_id,
                     role="assistant",
-                    content=final_answer,
+                    content=persisted_content,
                 )
                 session.add(assistant_msg)
                 await session.commit()

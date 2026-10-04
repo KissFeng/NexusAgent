@@ -8,7 +8,7 @@ import {
   streamChat,
   streamResumeApproval,
 } from './api/client';
-import type { User, Workspace, ModelConfig, Conversation, Message, Citation, PendingApproval, Skill, ToolConfig, Memory } from './types';
+import type { User, Workspace, ModelConfig, Conversation, Message, Citation, PendingApproval, Skill, ToolConfig, Memory, ToolCallEvent } from './types';
 import { AuthModal } from './components/AuthModal';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
@@ -22,6 +22,8 @@ interface StreamingSession {
   conversationId: string;
   isStreaming: boolean;
   content: string;
+  thinking: string;
+  toolCalls: ToolCallEvent[];
   citations: Citation[];
   pendingApproval: PendingApproval | null;
   controller: AbortController;
@@ -248,6 +250,8 @@ export default function App() {
         conversationId: convId,
         isStreaming: true,
         content: '',
+        thinking: '',
+        toolCalls: [],
         citations: [],
         pendingApproval: null,
         controller,
@@ -291,6 +295,8 @@ export default function App() {
                   conversationId: conversation_id,
                   isStreaming: true,
                   content: '',
+                  thinking: '',
+                  toolCalls: [],
                   citations: [],
                   pendingApproval: null,
                   controller,
@@ -325,6 +331,74 @@ export default function App() {
             [targetConvId]: {
               ...current,
               content: current.content + chunk,
+            },
+          };
+        });
+      },
+      onThinkingChunk: (chunk) => {
+        setStreamingSessions((prev) => {
+          const current = prev[targetConvId];
+          if (!current) return prev;
+          return {
+            ...prev,
+            [targetConvId]: {
+              ...current,
+              thinking: current.thinking + chunk,
+            },
+          };
+        });
+      },
+      onToolCall: (tc) => {
+        setStreamingSessions((prev) => {
+          const current = prev[targetConvId];
+          if (!current) return prev;
+          const existingIdx = current.toolCalls.findIndex((t) => t.tool_id === tc.tool_id);
+          let nextTools: ToolCallEvent[];
+          if (existingIdx >= 0) {
+            nextTools = [...current.toolCalls];
+            nextTools[existingIdx] = { ...nextTools[existingIdx], ...tc };
+          } else {
+            nextTools = [...current.toolCalls, { ...tc, timestamp: Date.now() }];
+          }
+          return {
+            ...prev,
+            [targetConvId]: {
+              ...current,
+              toolCalls: nextTools,
+            },
+          };
+        });
+      },
+      onToolResult: (tr) => {
+        setStreamingSessions((prev) => {
+          const current = prev[targetConvId];
+          if (!current) return prev;
+          const existingIdx = current.toolCalls.findIndex((t) => t.tool_id === tr.tool_id);
+          let nextTools: ToolCallEvent[];
+          if (existingIdx >= 0) {
+            nextTools = [...current.toolCalls];
+            nextTools[existingIdx] = {
+              ...nextTools[existingIdx],
+              status: 'completed',
+              content: tr.content,
+            };
+          } else {
+            nextTools = [
+              ...current.toolCalls,
+              {
+                tool_id: tr.tool_id || `tool-${Date.now()}`,
+                tool_name: tr.tool_name || 'Tool',
+                status: 'completed',
+                content: tr.content,
+                timestamp: Date.now(),
+              },
+            ];
+          }
+          return {
+            ...prev,
+            [targetConvId]: {
+              ...current,
+              toolCalls: nextTools,
             },
           };
         });
@@ -435,6 +509,8 @@ export default function App() {
           conversationId: convId,
           isStreaming: true,
           content: '',
+          thinking: '',
+          toolCalls: current?.toolCalls || [],
           citations: current?.citations || [],
           pendingApproval: null,
           controller,
@@ -455,6 +531,48 @@ export default function App() {
             [convId]: {
               ...current,
               content: current.content + chunk,
+            },
+          };
+        });
+      },
+      onThinkingChunk: (chunk) => {
+        setStreamingSessions((prev) => {
+          const current = prev[convId];
+          if (!current) return prev;
+          return {
+            ...prev,
+            [convId]: {
+              ...current,
+              thinking: current.thinking + chunk,
+            },
+          };
+        });
+      },
+      onToolCall: (tc) => {
+        setStreamingSessions((prev) => {
+          const current = prev[convId];
+          if (!current) return prev;
+          return {
+            ...prev,
+            [convId]: {
+              ...current,
+              toolCalls: [...current.toolCalls, { ...tc, timestamp: Date.now() }],
+            },
+          };
+        });
+      },
+      onToolResult: (tr) => {
+        setStreamingSessions((prev) => {
+          const current = prev[convId];
+          if (!current) return prev;
+          const updated = current.toolCalls.map((t) =>
+            t.tool_id === tr.tool_id ? { ...t, status: 'completed' as const, content: tr.content } : t
+          );
+          return {
+            ...prev,
+            [convId]: {
+              ...current,
+              toolCalls: updated,
             },
           };
         });
@@ -559,6 +677,8 @@ export default function App() {
         currentConversation={conversations.find((c) => c.id === activeConversationId) || null}
         messages={currentMessages}
         streamingContent={currentStreamingContent}
+        streamingThinking={currentSession?.thinking || ''}
+        streamingToolCalls={currentSession?.toolCalls || []}
         streamingCitations={currentStreamingCitations}
         pendingApproval={currentPendingApproval}
         isStreaming={currentIsStreaming}

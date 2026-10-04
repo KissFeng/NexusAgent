@@ -59,6 +59,15 @@ export interface PendingApproval {
   tool_call_id: string;
 }
 
+export interface ToolCallEvent {
+  tool_id: string;
+  tool_name: string;
+  args?: Record<string, any>;
+  status: 'running' | 'completed' | 'error';
+  content?: string;
+  timestamp?: number;
+}
+
 export interface Message {
   id: string;
   conversation_id: string;
@@ -68,6 +77,8 @@ export interface Message {
   created_at: string;
   citations?: Citation[];
   pending_approval?: PendingApproval;
+  thinking?: string;
+  tool_calls?: ToolCallEvent[];
 }
 
 export interface KnowledgeBase {

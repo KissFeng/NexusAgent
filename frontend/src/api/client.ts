@@ -11,6 +11,7 @@ import type {
   Skill,
   ToolConfig,
   Memory,
+  ToolCallEvent,
 } from '../types';
 
 const BASE_URL = '/api/v1';
@@ -296,6 +297,9 @@ export async function streamChat({
   skillCode,
   onStart,
   onChunk,
+  onThinkingChunk,
+  onToolCall,
+  onToolResult,
   onCitation,
   onApprovalRequired,
   onDone,
@@ -308,6 +312,9 @@ export async function streamChat({
   skillCode?: string;
   onStart?: (info: { conversation_id: string; title: string; skill_code?: string }) => void;
   onChunk: (chunk: string) => void;
+  onThinkingChunk?: (chunk: string) => void;
+  onToolCall?: (toolCall: any) => void;
+  onToolResult?: (toolResult: any) => void;
   onCitation?: (citation: Citation) => void;
   onApprovalRequired?: (approval: PendingApproval) => void;
   onDone: (conversationId: string) => void;
@@ -341,7 +348,17 @@ export async function streamChat({
       throw new Error(err.detail || '流式连接建立失败');
     }
 
-    await parseEventStream(res, { onStart, onChunk, onCitation, onApprovalRequired, onDone, onError });
+    await parseEventStream(res, {
+      onStart,
+      onChunk,
+      onThinkingChunk,
+      onToolCall,
+      onToolResult,
+      onCitation,
+      onApprovalRequired,
+      onDone,
+      onError,
+    });
   } catch (err: unknown) {
     if (signal?.aborted) return;
     const message = err instanceof Error ? err.message : '未知流式异常';
@@ -357,6 +374,9 @@ export async function streamResumeApproval({
   modelConfigId,
   onStart,
   onChunk,
+  onThinkingChunk,
+  onToolCall,
+  onToolResult,
   onDone,
   onError,
 }: {
@@ -366,6 +386,9 @@ export async function streamResumeApproval({
   modelConfigId?: string;
   onStart?: (info: { conversation_id: string; title: string }) => void;
   onChunk: (chunk: string) => void;
+  onThinkingChunk?: (chunk: string) => void;
+  onToolCall?: (toolCall: ToolCallEvent) => void;
+  onToolResult?: (toolResult: { tool_id: string; content: string; status?: string }) => void;
   onDone: (conversationId: string) => void;
   onError: (err: string) => void;
 }) {
@@ -395,7 +418,15 @@ export async function streamResumeApproval({
       throw new Error(err.detail || '恢复执行失败');
     }
 
-    await parseEventStream(res, { onStart, onChunk, onDone, onError });
+    await parseEventStream(res, {
+      onStart,
+      onChunk,
+      onThinkingChunk,
+      onToolCall,
+      onToolResult,
+      onDone,
+      onError,
+    });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : '恢复执行异常';
     onError(message);
@@ -407,6 +438,9 @@ async function parseEventStream(
   callbacks: {
     onStart?: (info: { conversation_id: string; title: string; skill_code?: string }) => void;
     onChunk: (chunk: string) => void;
+    onThinkingChunk?: (chunk: string) => void;
+    onToolCall?: (toolCall: any) => void;
+    onToolResult?: (toolResult: any) => void;
     onCitation?: (citation: Citation) => void;
     onApprovalRequired?: (approval: PendingApproval) => void;
     onDone: (conversationId: string) => void;
@@ -444,6 +478,12 @@ async function parseEventStream(
           });
         } else if (payload.type === 'chunk') {
           callbacks.onChunk(payload.content);
+        } else if (payload.type === 'thinking_chunk' && callbacks.onThinkingChunk) {
+          callbacks.onThinkingChunk(payload.content);
+        } else if (payload.type === 'tool_call' && callbacks.onToolCall) {
+          callbacks.onToolCall(payload);
+        } else if (payload.type === 'tool_result' && callbacks.onToolResult) {
+          callbacks.onToolResult(payload);
         } else if (payload.type === 'citation' && callbacks.onCitation) {
           callbacks.onCitation(payload.citation);
         } else if (payload.type === 'approval_required' && callbacks.onApprovalRequired) {
