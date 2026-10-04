@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   api,
   getAuthToken,
@@ -43,6 +44,9 @@ interface StreamingSession {
 }
 
 export default function App() {
+  const location = useLocation();
+  const navigate = useNavigate();
+
   const [user, setUser] = useState<User | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [currentWorkspace, setCurrentWorkspace] = useState<Workspace | null>(null);
@@ -74,6 +78,58 @@ export default function App() {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
+  // 统一路由导航方法
+  const navigateToTab = (tab: MainNavTab, subId?: string) => {
+    setActiveMainTab(tab);
+    if (tab === 'chat') {
+      const convId = subId || activeConversationId;
+      navigate(convId ? `/chat/${convId}` : '/chat');
+    } else if (tab === 'plaza') {
+      const cat = subId || plazaCategory;
+      navigate(cat && cat !== 'all' ? `/plaza/${cat}` : '/plaza');
+    } else if (tab === 'knowledge') {
+      const kbId = subId || selectedKbId;
+      navigate(kbId ? `/knowledge/${kbId}` : '/knowledge');
+    } else if (tab === 'settings') {
+      const sTab = subId || activeSettingsTab || 'model';
+      navigate(`/settings/${sTab}`);
+    } else if (tab === 'memory') {
+      navigate('/memory');
+    }
+  };
+
+  // 监听浏览器路由变化 (支持前进/后退、多标签深度链接与直接访问)
+  useEffect(() => {
+    const path = location.pathname;
+    const parts = path.split('/').filter(Boolean);
+    const firstPart = parts[0] as MainNavTab | undefined;
+    const secondPart = parts[1];
+
+    if (!firstPart || firstPart === 'chat') {
+      setActiveMainTab('chat');
+      if (secondPart && secondPart !== activeConversationIdRef.current) {
+        setActiveConversationId(secondPart);
+      }
+    } else if (firstPart === 'plaza') {
+      setActiveMainTab('plaza');
+      if (secondPart) {
+        setPlazaCategory(secondPart as PlazaCategory);
+      }
+    } else if (firstPart === 'knowledge') {
+      setActiveMainTab('knowledge');
+      if (secondPart) {
+        setSelectedKbId(secondPart);
+      }
+    } else if (firstPart === 'settings') {
+      setActiveMainTab('settings');
+      if (secondPart) {
+        setActiveSettingsTab(secondPart as SettingsSubTab);
+      }
+    } else if (firstPart === 'memory') {
+      setActiveMainTab('memory');
+    }
+  }, [location.pathname]);
+
   const handleDeleteMessage = (messageId: string) => {
     if (!activeConversationId) return;
     setMessagesByConv((prev) => ({
@@ -100,6 +156,8 @@ export default function App() {
       ...prev,
       [draftId]: [...(prev[convId] || [])],
     }));
+    setActiveMainTab('chat');
+    navigate(`/chat/${draftId}`);
   };
 
   // 1. Initial auth check
@@ -170,7 +228,13 @@ export default function App() {
       }
 
       if (convList.length > 0) {
-        setActiveConversationId(convList[0].id);
+        const pathParts = window.location.pathname.split('/').filter(Boolean);
+        const urlConvId = pathParts[0] === 'chat' ? pathParts[1] : null;
+        const targetId = urlConvId && convList.some((c) => c.id === urlConvId) ? urlConvId : convList[0].id;
+        setActiveConversationId(targetId);
+        if (window.location.pathname === '/' || window.location.pathname === '/chat') {
+          navigate(`/chat/${targetId}`, { replace: true });
+        }
       } else {
         setActiveConversationId(null);
         setMessagesByConv({});
@@ -253,6 +317,7 @@ export default function App() {
       [draftId]: [],
     }));
     setActiveMainTab('chat');
+    navigate(`/chat/${draftId}`);
   };
 
   const handleDeleteConversation = async (id: string) => {
@@ -274,7 +339,9 @@ export default function App() {
         return next;
       });
       if (activeConversationId === id) {
-        setActiveConversationId(remaining.length > 0 ? remaining[0].id : null);
+        const nextId = remaining.length > 0 ? remaining[0].id : null;
+        setActiveConversationId(nextId);
+        navigate(nextId ? `/chat/${nextId}` : '/chat');
       }
       return;
     }
@@ -290,7 +357,9 @@ export default function App() {
         return next;
       });
       if (activeConversationId === id) {
-        setActiveConversationId(remaining.length > 0 ? remaining[0].id : null);
+        const nextId = remaining.length > 0 ? remaining[0].id : null;
+        setActiveConversationId(nextId);
+        navigate(nextId ? `/chat/${nextId}` : '/chat');
       }
     } catch (err) {
       alert('删除失败');
@@ -315,6 +384,7 @@ export default function App() {
           prev.map((c) => (c.id === convId ? created : c))
         );
         setActiveConversationId(actualConvId);
+        navigate(`/chat/${actualConvId}`, { replace: true });
         setMessagesByConv((prev) => {
           const draftMsgs = prev[convId] || [];
           const next = { ...prev };
@@ -590,7 +660,7 @@ export default function App() {
         currentWorkspace={currentWorkspace}
         workspaces={workspaces}
         activeTab={activeMainTab}
-        onSelectTab={(tab) => setActiveMainTab(tab)}
+        onSelectTab={(tab) => navigateToTab(tab)}
         onSelectWorkspace={handleSelectWorkspace}
         onCreateWorkspace={handleCreateWorkspace}
         onLogout={handleLogout}
@@ -609,7 +679,7 @@ export default function App() {
           activeConversationId={activeConversationId}
           onSelectConversation={(id) => {
             setActiveConversationId(id);
-            setActiveMainTab('chat');
+            navigateToTab('chat', id);
           }}
           onNewConversation={handleNewConversation}
           onDeleteConversation={handleDeleteConversation}
@@ -618,7 +688,10 @@ export default function App() {
           )}
           // Plaza 相关
           plazaCategory={plazaCategory}
-          onSelectPlazaCategory={setPlazaCategory}
+          onSelectPlazaCategory={(cat) => {
+            setPlazaCategory(cat);
+            navigate(`/plaza/${cat}`);
+          }}
           plazaTagFilter={plazaTagFilter}
           onSelectPlazaTagFilter={setPlazaTagFilter}
           // Knowledge 相关
@@ -626,14 +699,14 @@ export default function App() {
           selectedKbId={selectedKbId}
           onSelectKb={(id) => {
             setSelectedKbId(id);
-            setActiveMainTab('knowledge');
+            navigateToTab('knowledge', id);
           }}
-          onCreateKb={() => setActiveMainTab('knowledge')}
+          onCreateKb={() => navigateToTab('knowledge')}
           // Settings 相关
           activeSettingsTab={activeSettingsTab}
           onSelectSettingsTab={(tab) => {
             setActiveSettingsTab(tab);
-            setActiveMainTab('settings');
+            navigateToTab('settings', tab);
           }}
         />
       )}
@@ -658,8 +731,8 @@ export default function App() {
             onSelectModel={(id) => setSelectedModelId(id)}
             onSendMessage={handleSendMessage}
             onStopStreaming={handleStopStreaming}
-            onNavigateToPlaza={() => setActiveMainTab('plaza')}
-            onNavigateToSettings={() => setActiveMainTab('settings')}
+            onNavigateToPlaza={() => navigateToTab('plaza')}
+            onNavigateToSettings={() => navigateToTab('settings')}
             onApproveAction={handleApproveAction}
             onDeleteMessage={handleDeleteMessage}
             onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
@@ -677,7 +750,7 @@ export default function App() {
             onRefreshSkills={() => api.listSkills().then(setSkills)}
             onNavigateToSettings={(tab) => {
               setActiveSettingsTab(tab);
-              setActiveMainTab('settings');
+              navigateToTab('settings', tab);
             }}
           />
         )}
@@ -702,9 +775,9 @@ export default function App() {
             activeTab={activeSettingsTab}
             onNavigateToPlaza={(cat) => {
               setPlazaCategory(cat);
-              setActiveMainTab('plaza');
+              navigateToTab('plaza', cat);
             }}
-            onNavigateToKnowledge={() => setActiveMainTab('knowledge')}
+            onNavigateToKnowledge={() => navigateToTab('knowledge')}
             models={models}
             onRefreshModels={() => api.listModels().then(setModels)}
             skills={skills}
