@@ -8,6 +8,7 @@ from app.api.v1.auth import router as auth_router
 from app.api.v1.workspace import router as workspace_router
 from app.api.v1.model_provider import router as model_router
 from app.api.v1.chat import router as chat_router
+from app.api.v1.knowledge import router as knowledge_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -40,6 +41,7 @@ app.include_router(auth_router, prefix=settings.API_V1_STR)
 app.include_router(workspace_router, prefix=settings.API_V1_STR)
 app.include_router(model_router, prefix=settings.API_V1_STR)
 app.include_router(chat_router, prefix=settings.API_V1_STR)
+app.include_router(knowledge_router, prefix=settings.API_V1_STR)
 
 @app.get("/health")
 async def health_check():

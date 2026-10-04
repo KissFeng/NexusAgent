@@ -23,6 +23,12 @@ wheels/
 .installed.cfg
 *.egg
 
+# Qdrant data
+qdrant_data/
+backend/qdrant_data/
+qdrant_storage/
+backend/qdrant_storage/
+
 # Node
 node_modules/
 frontend/node_modules/

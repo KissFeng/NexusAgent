@@ -38,11 +38,63 @@ export interface Conversation {
   last_message?: string;
 }
 
+export interface Citation {
+  source_index: number;
+  point_id: string;
+  document_id?: string;
+  knowledge_base_id?: string;
+  filename: string;
+  chunk_index: number;
+  content: string;
+  score: number;
+  dense_score?: number;
+  sparse_score?: number;
+  match_type?: string;
+}
+
+export interface PendingApproval {
+  action_type: string;
+  target: string;
+  reason: string;
+  tool_call_id: string;
+}
+
 export interface Message {
   id: string;
   conversation_id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
   token_count: number;
+  created_at: string;
+  citations?: Citation[];
+  pending_approval?: PendingApproval;
+}
+
+export interface KnowledgeBase {
+  id: string;
+  workspace_id: string;
+  name: string;
+  description?: string;
+  document_count: number;
+  created_at: string;
+}
+
+export interface Document {
+  id: string;
+  knowledge_base_id: string;
+  filename: string;
+  file_type: string;
+  file_size: number;
+  chunk_count: number;
+  status: string;
+  created_at: string;
+}
+
+export interface DocumentChunk {
+  id: string;
+  document_id: string;
+  chunk_index: number;
+  content: string;
+  qdrant_point_id: string;
   created_at: string;
 }

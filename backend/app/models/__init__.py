@@ -3,6 +3,7 @@ from app.models.user import User
 from app.models.workspace import Workspace, WorkspaceMember
 from app.models.model_provider import ModelConfig
 from app.models.chat import Conversation, Message
+from app.models.knowledge import KnowledgeBase, Document, DocumentChunk
 
 __all__ = [
     "Base",
@@ -12,4 +13,7 @@ __all__ = [
     "ModelConfig",
     "Conversation",
     "Message",
+    "KnowledgeBase",
+    "Document",
+    "DocumentChunk",
 ]

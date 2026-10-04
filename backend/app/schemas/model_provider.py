@@ -11,6 +11,7 @@ class ModelConfigCreateRequest(BaseModel):
 
 class ModelConfigUpdateRequest(BaseModel):
     name: str | None = None
+    provider: str | None = None
     model_name: str | None = None
     base_url: str | None = None
     api_key: str | None = None

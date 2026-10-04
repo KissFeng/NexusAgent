@@ -1,10 +1,19 @@
 import { useState, useEffect, useRef } from 'react';
-import { api, getAuthToken, removeAuthToken, setStoredWorkspaceId, getStoredWorkspaceId, streamChat } from './api/client';
-import type { User, Workspace, ModelConfig, Conversation, Message } from './types';
+import {
+  api,
+  getAuthToken,
+  removeAuthToken,
+  setStoredWorkspaceId,
+  getStoredWorkspaceId,
+  streamChat,
+  streamResumeApproval,
+} from './api/client';
+import type { User, Workspace, ModelConfig, Conversation, Message, Citation, PendingApproval } from './types';
 import { AuthModal } from './components/AuthModal';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
 import { ModelConfigModal } from './components/ModelConfigModal';
+import { KnowledgeBaseModal } from './components/KnowledgeBaseModal';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -17,13 +26,16 @@ export default function App() {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
 
-  // Streaming state
+  // Streaming & RAG Citations & LangGraph Interrupts
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
+  const [streamingCitations, setStreamingCitations] = useState<Citation[]>([]);
+  const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  // Modal state
+  // Modals
   const [isModelModalOpen, setIsModelModalOpen] = useState(false);
+  const [isKbModalOpen, setIsKbModalOpen] = useState(false);
 
   // 1. Initial auth check
   useEffect(() => {
@@ -60,7 +72,7 @@ export default function App() {
     }
   };
 
-  // 3. Fetch workspace resources (models, conversations) when current workspace changes
+  // 3. Fetch workspace resources
   useEffect(() => {
     if (!currentWorkspace) return;
     loadWorkspaceResources();
@@ -95,6 +107,8 @@ export default function App() {
   useEffect(() => {
     if (!activeConversationId) {
       setMessages([]);
+      setPendingApproval(null);
+      setStreamingCitations([]);
       return;
     }
     api.getMessages(activeConversationId)
@@ -122,6 +136,8 @@ export default function App() {
     setActiveConversationId(null);
     setMessages([]);
     setStreamingContent('');
+    setStreamingCitations([]);
+    setPendingApproval(null);
   };
 
   const handleDeleteConversation = async (id: string) => {
@@ -144,7 +160,6 @@ export default function App() {
   const handleSendMessage = async (content: string) => {
     if (isStreaming) return;
 
-    // Append user message to UI immediately for instantaneous feedback
     const tempUserMessage: Message = {
       id: `temp-${Date.now()}`,
       conversation_id: activeConversationId || '',
@@ -157,6 +172,8 @@ export default function App() {
 
     setIsStreaming(true);
     setStreamingContent('');
+    setStreamingCitations([]);
+    setPendingApproval(null);
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -170,7 +187,6 @@ export default function App() {
       signal: controller.signal,
       onStart: ({ conversation_id, title }) => {
         setActiveConversationId(conversation_id);
-        // If this was a new conversation, update list
         setConversations((prev) => {
           if (!prev.some((c) => c.id === conversation_id)) {
             return [
@@ -192,24 +208,75 @@ export default function App() {
         accumulatedContent += chunk;
         setStreamingContent(accumulatedContent);
       },
+      onCitation: (citation) => {
+        setStreamingCitations((prev) => {
+          if (!prev.some((c) => c.point_id === citation.point_id)) {
+            return [...prev, citation];
+          }
+          return prev;
+        });
+      },
+      onApprovalRequired: (approval) => {
+        setPendingApproval(approval);
+      },
       onError: (err) => {
         console.error('Chat error:', err);
       },
       onDone: async (finalConvId) => {
         setIsStreaming(false);
         setStreamingContent('');
-        // Reload persisted messages from backend
         if (finalConvId) {
           const updatedMsgs = await api.getMessages(finalConvId);
+          // 关联当前检索到的溯源证据至最新的 Assistant 消息
+          setStreamingCitations((latestCitations) => {
+            if (latestCitations.length > 0 && updatedMsgs.length > 0) {
+              const lastAssistant = [...updatedMsgs].reverse().find((m) => m.role === 'assistant');
+              if (lastAssistant) {
+                lastAssistant.citations = [...latestCitations];
+              }
+            }
+            return latestCitations;
+          });
           setMessages(updatedMsgs);
         }
-        // Refresh conversations to update order/title
         const updatedConvs = await api.listConversations();
         setConversations(updatedConvs);
       },
     });
 
     setIsStreaming(false);
+  };
+
+  const handleApproveAction = async (approved: boolean) => {
+    if (!activeConversationId) return;
+
+    setPendingApproval(null);
+    setIsStreaming(true);
+    setStreamingContent('');
+
+    let accumulated = '';
+
+    await streamResumeApproval({
+      conversationId: activeConversationId,
+      approved,
+      modelConfigId: selectedModelId || undefined,
+      onChunk: (chunk) => {
+        accumulated += chunk;
+        setStreamingContent(accumulated);
+      },
+      onDone: async (finalConvId) => {
+        setIsStreaming(false);
+        setStreamingContent('');
+        if (finalConvId) {
+          const updatedMsgs = await api.getMessages(finalConvId);
+          setMessages(updatedMsgs);
+        }
+      },
+      onError: (err) => {
+        alert(err);
+        setIsStreaming(false);
+      },
+    });
   };
 
   const handleStopStreaming = () => {
@@ -251,6 +318,8 @@ export default function App() {
         currentConversation={conversations.find((c) => c.id === activeConversationId) || null}
         messages={messages}
         streamingContent={streamingContent}
+        streamingCitations={streamingCitations}
+        pendingApproval={pendingApproval}
         isStreaming={isStreaming}
         models={models}
         selectedModelId={selectedModelId}
@@ -258,6 +327,8 @@ export default function App() {
         onSendMessage={handleSendMessage}
         onStopStreaming={handleStopStreaming}
         onOpenModelConfig={() => setIsModelModalOpen(true)}
+        onOpenKnowledgeBase={() => setIsKbModalOpen(true)}
+        onApproveAction={handleApproveAction}
       />
 
       <ModelConfigModal
@@ -267,6 +338,11 @@ export default function App() {
         onRefresh={() => {
           api.listModels().then(setModels);
         }}
+      />
+
+      <KnowledgeBaseModal
+        isOpen={isKbModalOpen}
+        onClose={() => setIsKbModalOpen(false)}
       />
     </div>
   );

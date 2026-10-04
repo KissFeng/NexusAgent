@@ -104,6 +104,8 @@ async def update_model(
 
     if req.name is not None:
         model_config.name = req.name
+    if req.provider is not None:
+        model_config.provider = req.provider
     if req.model_name is not None:
         model_config.model_name = req.model_name
     if req.base_url is not None:
@@ -117,6 +119,44 @@ async def update_model(
             .values(is_default=False)
         )
         model_config.is_default = True
+
+    await db.commit()
+    await db.refresh(model_config)
+
+    return ModelConfigResponse(
+        id=model_config.id,
+        workspace_id=model_config.workspace_id,
+        name=model_config.name,
+        provider=model_config.provider,
+        model_name=model_config.model_name,
+        base_url=model_config.base_url,
+        has_api_key=bool(model_config.api_key and model_config.api_key.strip()),
+        is_default=model_config.is_default,
+        created_at=model_config.created_at,
+    )
+
+@router.post("/{model_id}/set-default", response_model=ModelConfigResponse)
+async def set_default_model(
+    model_id: str,
+    ws_info: Annotated[tuple[Workspace, str], Depends(get_current_workspace)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    workspace, role = ws_info
+    if role not in ["owner", "admin"]:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权修改模型配置")
+
+    stmt = select(ModelConfig).where(ModelConfig.id == model_id, ModelConfig.workspace_id == workspace.id)
+    model_config = (await db.execute(stmt)).scalar_one_or_none()
+    if not model_config:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="模型配置不存在")
+
+    # 取消当前工作区内其他所有默认模型
+    await db.execute(
+        update(ModelConfig)
+        .where(ModelConfig.workspace_id == workspace.id)
+        .values(is_default=False)
+    )
+    model_config.is_default = True
 
     await db.commit()
     await db.refresh(model_config)
