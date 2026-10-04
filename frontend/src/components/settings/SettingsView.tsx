@@ -15,6 +15,14 @@ import {
   Copy,
   Check,
   ExternalLink,
+  Terminal,
+  Globe,
+  Activity,
+  FileCode,
+  CheckSquare,
+  Square,
+  Sparkles,
+  Wrench,
 } from 'lucide-react';
 import type {
   ModelConfig,
@@ -73,12 +81,23 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   // ---- 2. MCP State ----
   const [isAddingMcp, setIsAddingMcp] = useState(false);
+  const [editingMcp, setEditingMcp] = useState<ToolConfig | null>(null);
+  const [mcpInputMode, setMcpInputMode] = useState<'form' | 'json'>('form');
+  const [mcpTransportType, setMcpTransportType] = useState<'stdio' | 'sse' | 'http'>('stdio');
   const [mcpForm, setMcpForm] = useState({
     name: '',
     description: '',
-    tool_type: 'mcp_server',
-    config_json: '{\n  "command": "npx",\n  "args": ["-y", "@modelcontextprotocol/server-fetch"]\n}',
+    command: 'npx',
+    args: '-y @modelcontextprotocol/server-fetch',
+    env_text: '{}',
+    server_url: 'http://127.0.0.1:8000/api/v1/tools/mcp-mock',
+    headers_text: '{}',
+    raw_json: '{\n  "command": "npx",\n  "args": ["-y", "@modelcontextprotocol/server-fetch"]\n}',
   });
+  const [testingMcpId, setTestingMcpId] = useState<string | null>(null);
+  const [mcpTestResults, setMcpTestResults] = useState<
+    Record<string, { success: boolean; message: string; tools: Array<{ name: string; description?: string }> }>
+  >({});
 
   // ---- 3. Skill State ----
   const [isAddingSkill, setIsAddingSkill] = useState(false);
@@ -177,33 +196,179 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   // ================= 2. MCP HANDLERS =================
+  const handleOpenAddMcp = () => {
+    setEditingMcp(null);
+    setMcpInputMode('form');
+    setMcpTransportType('stdio');
+    setMcpForm({
+      name: '',
+      description: '',
+      command: 'npx',
+      args: '-y @modelcontextprotocol/server-fetch',
+      env_text: '{}',
+      server_url: 'http://127.0.0.1:8000/api/v1/tools/mcp-mock',
+      headers_text: '{}',
+      raw_json: '{\n  "command": "npx",\n  "args": ["-y", "@modelcontextprotocol/server-fetch"]\n}',
+    });
+    setIsAddingMcp(true);
+  };
+
+  const handleEditMcp = (tool: ToolConfig) => {
+    setEditingMcp(tool);
+    setIsAddingMcp(true);
+    setMcpInputMode('form');
+    const cfg = tool.config || {};
+
+    let transport: 'stdio' | 'sse' | 'http' = 'stdio';
+    if (cfg.server_url || cfg.url) {
+      transport = cfg.protocol === 'sse' || (cfg.server_url || cfg.url).includes('/sse') ? 'sse' : 'http';
+    }
+
+    setMcpTransportType(transport);
+    setMcpForm({
+      name: tool.name,
+      description: tool.description || '',
+      command: cfg.command || 'npx',
+      args: Array.isArray(cfg.args) ? cfg.args.join(' ') : (cfg.args || ''),
+      env_text: JSON.stringify(cfg.env || {}, null, 2),
+      server_url: cfg.server_url || cfg.url || 'http://127.0.0.1:8000/api/v1/tools/mcp-mock',
+      headers_text: JSON.stringify(cfg.headers || {}, null, 2),
+      raw_json: JSON.stringify(cfg, null, 2),
+    });
+  };
+
   const handleSaveMcp = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      let cfg = {};
-      try {
-        cfg = JSON.parse(mcpForm.config_json);
-      } catch {
-        alert('配置必须是标准 JSON 格式！');
-        return;
+      let finalConfig: Record<string, any> = {};
+      let finalName = mcpForm.name.trim();
+
+      if (mcpInputMode === 'json') {
+        let parsed: any;
+        try {
+          parsed = JSON.parse(mcpForm.raw_json);
+        } catch {
+          alert('配置必须是标准 JSON 格式！');
+          return;
+        }
+
+        // Cherry Studio / Claude 标准 mcpServers 格式识别
+        if (parsed.mcpServers && typeof parsed.mcpServers === 'object') {
+          const serverKeys = Object.keys(parsed.mcpServers);
+          if (serverKeys.length === 0) {
+            alert('mcpServers 字段内容为空！');
+            return;
+          }
+          if (serverKeys.length > 1 && !editingMcp) {
+            for (const key of serverKeys) {
+              const item = parsed.mcpServers[key];
+              await api.createTool({
+                name: key,
+                description: `从 JSON 批量接入的 MCP 服务: ${key}`,
+                tool_type: 'mcp_server',
+                config: item,
+                is_enabled: true,
+              });
+            }
+            setIsAddingMcp(false);
+            onRefreshTools();
+            return;
+          }
+          const firstKey = serverKeys[0];
+          finalConfig = parsed.mcpServers[firstKey];
+          if (!finalName) {
+            finalName = firstKey;
+          }
+        } else {
+          finalConfig = parsed;
+        }
+      } else {
+        if (mcpTransportType === 'stdio') {
+          let envObj = {};
+          try {
+            if (mcpForm.env_text && mcpForm.env_text.trim()) {
+              envObj = JSON.parse(mcpForm.env_text);
+            }
+          } catch {
+            alert('环境变量必须是合法的 JSON 对象！');
+            return;
+          }
+          const argsArr = mcpForm.args.trim() ? mcpForm.args.trim().split(/\s+/) : [];
+          finalConfig = {
+            command: mcpForm.command.trim(),
+            args: argsArr,
+            env: envObj,
+          };
+        } else {
+          let headersObj = {};
+          try {
+            if (mcpForm.headers_text && mcpForm.headers_text.trim()) {
+              headersObj = JSON.parse(mcpForm.headers_text);
+            }
+          } catch {
+            alert('请求头必须是合法的 JSON 对象！');
+            return;
+          }
+          finalConfig = {
+            server_url: mcpForm.server_url.trim(),
+            protocol: mcpTransportType === 'sse' ? 'sse' : 'jsonrpc-2.0',
+            headers: headersObj,
+          };
+        }
       }
-      await api.createTool({
-        name: mcpForm.name,
-        description: mcpForm.description,
-        tool_type: mcpForm.tool_type,
-        config: cfg,
-        is_enabled: true,
-      });
+
+      if (!finalName) {
+        finalName = '自定义 MCP 服务';
+      }
+
+      if (editingMcp) {
+        await api.updateTool(editingMcp.id, {
+          name: finalName,
+          description: mcpForm.description,
+          config: finalConfig,
+        });
+      } else {
+        await api.createTool({
+          name: finalName,
+          description: mcpForm.description,
+          tool_type: 'mcp_server',
+          config: finalConfig,
+          is_enabled: true,
+        });
+      }
+
       setIsAddingMcp(false);
-      setMcpForm({
-        name: '',
-        description: '',
-        tool_type: 'mcp_server',
-        config_json: '{\n  "command": "npx",\n  "args": ["-y", "@modelcontextprotocol/server-fetch"]\n}',
-      });
+      setEditingMcp(null);
       onRefreshTools();
     } catch (err: any) {
-      alert(`添加 MCP 失败: ${err.message}`);
+      alert(`保存 MCP 失败: ${err.message}`);
+    }
+  };
+
+  const handleTestMcp = async (toolId: string, serverUrl?: string, headers?: any, protocol?: string) => {
+    try {
+      setTestingMcpId(toolId);
+      const url = serverUrl || 'http://127.0.0.1:8000/api/v1/tools/mcp-mock';
+      const res = await api.testMcpServer(url, headers, protocol);
+      setMcpTestResults((prev) => ({
+        ...prev,
+        [toolId]: {
+          success: res.success,
+          message: res.message,
+          tools: res.tools || [],
+        },
+      }));
+    } catch (err: any) {
+      setMcpTestResults((prev) => ({
+        ...prev,
+        [toolId]: {
+          success: false,
+          message: err.message || '连接测试异常',
+          tools: [],
+        },
+      }));
+    } finally {
+      setTestingMcpId(null);
     }
   };
 
@@ -227,6 +392,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   // ================= 3. SKILL HANDLERS =================
+  const handleToggleBoundTool = (toolNameOrId: string) => {
+    const current = skillForm.bound_tools || [];
+    if (current.includes(toolNameOrId)) {
+      setSkillForm({ ...skillForm, bound_tools: current.filter((x) => x !== toolNameOrId) });
+    } else {
+      setSkillForm({ ...skillForm, bound_tools: [...current, toolNameOrId] });
+    }
+  };
+
   const handleSaveSkill = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -338,7 +512,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     <div className="flex-1 h-full bg-slate-950 overflow-y-auto px-8 py-6 text-slate-100">
       {/* ────────────────── 1. MODEL CONFIG ────────────────── */}
       {activeTab === 'model' && (
-        <div className="max-w-4xl space-y-6">
+        <div className="w-full space-y-6">
           <div className="flex items-center justify-between pb-4 border-b border-slate-800/80">
             <div>
               <h2 className="text-lg font-bold text-white flex items-center gap-2">
@@ -566,7 +740,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
       {/* ────────────────── 2. MCP SERVERS CONFIG ────────────────── */}
       {activeTab === 'mcp' && (
-        <div className="max-w-4xl space-y-6">
+        <div className="w-full space-y-6">
           <div className="flex items-center justify-between pb-4 border-b border-slate-800/80">
             <div>
               <h2 className="text-lg font-bold text-white flex items-center gap-2">
@@ -574,7 +748,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <span>MCP 服务管理 (Model Context Protocol)</span>
               </h2>
               <p className="text-xs text-slate-400 mt-1">
-                所有工具已全面收敛统一至 MCP 标准。支持内置核心能力与外部 Stdio / SSE 独立进程接入。
+                支持 Stdio 进程（CLI）与 SSE / HTTP 远程端点接入，兼容 Cherry Studio / Claude 标准配置导入、在线连通性测试与工具发现。
               </p>
             </div>
 
@@ -582,7 +756,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               {onNavigateToPlaza && (
                 <button
                   onClick={() => onNavigateToPlaza('mcp')}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-950/60 hover:bg-indigo-900/60 border border-indigo-500/30 text-indigo-300 text-xs font-semibold cursor-pointer"
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-950/60 hover:bg-indigo-900/60 border border-indigo-500/30 text-indigo-300 text-xs font-semibold cursor-pointer transition-colors"
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
                   <span>前往 MCP 广场装载</span>
@@ -590,8 +764,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               )}
 
               <button
-                onClick={() => setIsAddingMcp(!isAddingMcp)}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md cursor-pointer"
+                onClick={handleOpenAddMcp}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md cursor-pointer transition-colors"
               >
                 <Plus className="w-4 h-4" />
                 <span>添加自定义 MCP</span>
@@ -599,67 +773,308 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
 
-          {/* 添加自定义 MCP 表单 */}
+          {/* 添加/编辑自定义 MCP 表单 */}
           {isAddingMcp && (
-            <form onSubmit={handleSaveMcp} className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
-              <h3 className="text-sm font-bold text-white">添加自定义外部 MCP 服务</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">服务名称</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="如：PostgreSQL 数据自省服务"
-                    value={mcpForm.name}
-                    onChange={(e) => setMcpForm({ ...mcpForm, name: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200"
-                  />
+            <form onSubmit={handleSaveMcp} className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-5 shadow-xl">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                <div className="flex items-center gap-2">
+                  <Wrench className="w-4 h-4 text-indigo-400" />
+                  <h3 className="text-sm font-bold text-white">
+                    {editingMcp ? `编辑 MCP 服务: ${editingMcp.name}` : '接入自定义外部 MCP 服务'}
+                  </h3>
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">协议类型</label>
-                  <select
-                    value={mcpForm.tool_type}
-                    onChange={(e) => setMcpForm({ ...mcpForm, tool_type: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200"
+
+                {/* 录入模式切换 (对齐 Cherry Studio) */}
+                <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setMcpInputMode('form')}
+                    className={`px-3 py-1 rounded-lg transition-all ${
+                      mcpInputMode === 'form'
+                        ? 'bg-indigo-600 text-white font-semibold shadow'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
                   >
-                    <option value="mcp_server">MCP Stdio / SSE 外部进程</option>
-                    <option value="web_search">内置联网搜索</option>
-                    <option value="code_interpreter">内置代码沙箱</option>
-                  </select>
-                </div>
-                <div className="col-span-2">
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">服务简述</label>
-                  <input
-                    type="text"
-                    placeholder="简要说明该 MCP 服务提供的工具与意图"
-                    value={mcpForm.description}
-                    onChange={(e) => setMcpForm({ ...mcpForm, description: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200"
-                  />
-                </div>
-                <div className="col-span-2">
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">启动参数配置 (JSON)</label>
-                  <textarea
-                    rows={5}
-                    value={mcpForm.config_json}
-                    onChange={(e) => setMcpForm({ ...mcpForm, config_json: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs font-mono text-slate-200"
-                  />
+                    可视化表单
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMcpInputMode('json')}
+                    className={`flex items-center gap-1 px-3 py-1 rounded-lg transition-all ${
+                      mcpInputMode === 'json'
+                        ? 'bg-indigo-600 text-white font-semibold shadow'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <FileCode className="w-3 h-3" />
+                    <span>JSON / Cherry 格式导入</span>
+                  </button>
                 </div>
               </div>
-              <div className="flex items-center justify-end gap-3">
+
+              {mcpInputMode === 'form' ? (
+                /* ── 模式 1: 可视化表单 ── */
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">服务名称 *</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="如：PostgreSQL 数据自省服务"
+                        value={mcpForm.name}
+                        onChange={(e) => setMcpForm({ ...mcpForm, name: e.target.value })}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">传输协议类型 *</label>
+                      <div className="grid grid-cols-3 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setMcpTransportType('stdio')}
+                          className={`flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-medium border transition-all ${
+                            mcpTransportType === 'stdio'
+                              ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300 font-semibold'
+                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                          }`}
+                        >
+                          <Terminal className="w-3 h-3" />
+                          <span>Stdio 进程</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setMcpTransportType('sse')}
+                          className={`flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-medium border transition-all ${
+                            mcpTransportType === 'sse'
+                              ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300 font-semibold'
+                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                          }`}
+                        >
+                          <Activity className="w-3 h-3" />
+                          <span>SSE 实时流</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setMcpTransportType('http')}
+                          className={`flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-medium border transition-all ${
+                            mcpTransportType === 'http'
+                              ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300 font-semibold'
+                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                          }`}
+                        >
+                          <Globe className="w-3 h-3" />
+                          <span>HTTP RPC</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-300 mb-1">功能描述</label>
+                    <input
+                      type="text"
+                      placeholder="简要说明该 MCP 服务提供的工具职责与适用场景"
+                      value={mcpForm.description}
+                      onChange={(e) => setMcpForm({ ...mcpForm, description: e.target.value })}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+
+                  {/* Stdio 专有字段 */}
+                  {mcpTransportType === 'stdio' ? (
+                    <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 space-y-3">
+                      <div className="flex items-center gap-2 text-xs font-bold text-slate-200">
+                        <Terminal className="w-3.5 h-3.5 text-indigo-400" />
+                        <span>Stdio 本地进程执行配置</span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-[11px] text-slate-400 mb-1">主执行命令 (Command)</label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="如：npx, uvx, python"
+                            value={mcpForm.command}
+                            onChange={(e) => setMcpForm({ ...mcpForm, command: e.target.value })}
+                            className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5 text-xs font-mono text-slate-200"
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          <label className="block text-[11px] text-slate-400 mb-1">执行参数 (Arguments，空格分隔)</label>
+                          <input
+                            type="text"
+                            placeholder="如：-y @modelcontextprotocol/server-postgres postgresql://..."
+                            value={mcpForm.args}
+                            onChange={(e) => setMcpForm({ ...mcpForm, args: e.target.value })}
+                            className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5 text-xs font-mono text-slate-200"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-[11px] text-slate-400 mb-1">环境变量 (Environment Variables，JSON 格式)</label>
+                        <textarea
+                          rows={3}
+                          value={mcpForm.env_text}
+                          onChange={(e) => setMcpForm({ ...mcpForm, env_text: e.target.value })}
+                          placeholder={'{\n  "API_KEY": "sk-xxx"\n}'}
+                          className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-xs font-mono text-slate-200"
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    /* SSE / HTTP 专有字段 */
+                    <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-xs font-bold text-slate-200">
+                          <Globe className="w-3.5 h-3.5 text-indigo-400" />
+                          <span>远程端点连接配置 ({mcpTransportType.toUpperCase()})</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            let hdrs = {};
+                            try {
+                              if (mcpForm.headers_text.trim()) hdrs = JSON.parse(mcpForm.headers_text);
+                            } catch {}
+                            handleTestMcp('form-test', mcpForm.server_url, hdrs, mcpTransportType);
+                          }}
+                          disabled={testingMcpId === 'form-test'}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-600/30 hover:bg-indigo-600 text-indigo-300 hover:text-white text-[11px] font-semibold transition-colors cursor-pointer"
+                        >
+                          <Activity className="w-3 h-3" />
+                          <span>{testingMcpId === 'form-test' ? '探测中...' : '测试连接与探测工具'}</span>
+                        </button>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] text-slate-400 mb-1">服务端点 URL (Endpoint) *</label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="如：http://127.0.0.1:8000/api/v1/tools/mcp-mock 或 https://mcp.your-domain.com/sse"
+                          value={mcpForm.server_url}
+                          onChange={(e) => setMcpForm({ ...mcpForm, server_url: e.target.value })}
+                          className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5 text-xs font-mono text-slate-200"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] text-slate-400 mb-1">请求头配置 (Headers，JSON 格式)</label>
+                        <textarea
+                          rows={3}
+                          value={mcpForm.headers_text}
+                          onChange={(e) => setMcpForm({ ...mcpForm, headers_text: e.target.value })}
+                          placeholder={'{\n  "Authorization": "Bearer your-token"\n}'}
+                          className="w-full bg-slate-900 border border-slate-800 rounded-xl p-2.5 text-xs font-mono text-slate-200"
+                        />
+                      </div>
+
+                      {/* 表单内测试结果显示 */}
+                      {mcpTestResults['form-test'] && (
+                        <div
+                          className={`p-3 rounded-xl border text-xs ${
+                            mcpTestResults['form-test'].success
+                              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                              : 'bg-red-500/10 border-red-500/30 text-red-300'
+                          }`}
+                        >
+                          <div className="font-semibold">{mcpTestResults['form-test'].message}</div>
+                          {mcpTestResults['form-test'].tools.length > 0 && (
+                            <div className="mt-2 flex flex-wrap gap-1.5">
+                              {mcpTestResults['form-test'].tools.map((tl, i) => (
+                                <span key={i} className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-200 text-[10px] font-mono">
+                                  {tl.name}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* ── 模式 2: JSON / Cherry 格式导入 ── */
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-xs text-slate-400">
+                    <span>支持直接粘贴 Cherry Studio / Claude 标准 mcpServers JSON 配置</span>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setMcpForm({
+                            ...mcpForm,
+                            raw_json: JSON.stringify(
+                              {
+                                mcpServers: {
+                                  'github-mcp': {
+                                    command: 'npx',
+                                    args: ['-y', '@modelcontextprotocol/server-github'],
+                                    env: { GITHUB_PERSONAL_ACCESS_TOKEN: 'your-token' },
+                                  },
+                                },
+                              },
+                              null,
+                              2
+                            ),
+                          })
+                        }
+                        className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px]"
+                      >
+                        填入 Stdio 示例
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setMcpForm({
+                            ...mcpForm,
+                            raw_json: JSON.stringify(
+                              {
+                                mcpServers: {
+                                  'remote-sse-weather': {
+                                    type: 'sse',
+                                    url: 'http://127.0.0.1:8000/api/v1/tools/mcp-mock',
+                                  },
+                                },
+                              },
+                              null,
+                              2
+                            ),
+                          })
+                        }
+                        className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px]"
+                      >
+                        填入 SSE 示例
+                      </button>
+                    </div>
+                  </div>
+
+                  <textarea
+                    rows={10}
+                    value={mcpForm.raw_json}
+                    onChange={(e) => setMcpForm({ ...mcpForm, raw_json: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs font-mono text-slate-200 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-800">
                 <button
                   type="button"
-                  onClick={() => setIsAddingMcp(false)}
-                  className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white"
+                  onClick={() => {
+                    setIsAddingMcp(false);
+                    setEditingMcp(null);
+                  }}
+                  className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white transition-colors cursor-pointer"
                 >
                   取消
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white shadow-md cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white shadow-md cursor-pointer transition-colors"
                 >
-                  确认接入
+                  {editingMcp ? '保存修改' : '确认接入'}
                 </button>
               </div>
             </form>
@@ -667,58 +1082,148 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
           {/* MCP 卡片列表 */}
           <div className="space-y-3">
-            {tools.map((t) => (
-              <div
-                key={t.id}
-                className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800/80 flex items-center justify-between"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
-                    <Layers className="w-5 h-5" />
-                  </div>
-                  <div>
+            {tools.map((t) => {
+              const cfg = t.config || {};
+              const isStdio = !!cfg.command;
+              const isSse = cfg.protocol === 'sse' || (cfg.server_url && cfg.server_url.includes('/sse'));
+              const endpointPreview = cfg.server_url || cfg.url;
+              const commandPreview = cfg.command
+                ? `${cfg.command} ${Array.isArray(cfg.args) ? cfg.args.join(' ') : cfg.args || ''}`
+                : null;
+              const testInfo = mcpTestResults[t.id];
+
+              return (
+                <div
+                  key={t.id}
+                  className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800/80 hover:border-slate-750 transition-all space-y-3"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
+                        {isStdio ? (
+                          <Terminal className="w-5 h-5" />
+                        ) : endpointPreview ? (
+                          <Globe className="w-5 h-5" />
+                        ) : (
+                          <Layers className="w-5 h-5" />
+                        )}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-bold text-white">{t.name}</span>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 font-mono">
+                            {isStdio ? 'stdio' : isSse ? 'sse' : t.tool_type}
+                          </span>
+                          {t.is_enabled ? (
+                            <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300">
+                              运行中
+                            </span>
+                          ) : (
+                            <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-500">
+                              已停用
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs text-slate-400 mt-0.5 line-clamp-1">
+                          {t.description || '标准 MCP 协议外部服务'}
+                        </div>
+                      </div>
+                    </div>
+
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-bold text-white">{t.name}</span>
-                      <span className="text-[10px] px-2 py-0.2 rounded-full bg-slate-800 text-slate-400 font-mono">
-                        {t.tool_type}
+                      {/* 在线测试探针 */}
+                      {endpointPreview && (
+                        <button
+                          onClick={() => handleTestMcp(t.id, endpointPreview, cfg.headers, cfg.protocol)}
+                          disabled={testingMcpId === t.id}
+                          className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-indigo-900/40 hover:text-indigo-300 text-xs text-slate-300 transition-colors cursor-pointer"
+                          title="探测 MCP 连通性并获取工具清单"
+                        >
+                          <Activity className="w-3.5 h-3.5 text-indigo-400" />
+                          <span>{testingMcpId === t.id ? '测速中...' : '测试连接'}</span>
+                        </button>
+                      )}
+
+                      {/* 编辑按钮 */}
+                      <button
+                        onClick={() => handleEditMcp(t)}
+                        className="p-2 rounded-xl hover:bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                        title="编辑配置与参数"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+
+                      {/* 启停开关 */}
+                      <button
+                        onClick={() => handleToggleTool(t)}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                          t.is_enabled
+                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                            : 'bg-slate-800 text-slate-500 border border-slate-700'
+                        }`}
+                      >
+                        <CheckCircle className="w-3.5 h-3.5" />
+                        <span>{t.is_enabled ? '已启用' : '已停用'}</span>
+                      </button>
+
+                      {/* 卸载删除 */}
+                      <button
+                        onClick={() => handleDeleteTool(t.id)}
+                        className="p-2 rounded-xl hover:bg-red-500/10 text-slate-500 hover:text-red-400 transition-colors cursor-pointer"
+                        title="卸载/删除该 MCP 服务"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 路径与命令代码预览 */}
+                  {(commandPreview || endpointPreview) && (
+                    <div className="bg-slate-950/70 border border-slate-800/60 rounded-xl px-3 py-1.5 text-[11px] font-mono text-slate-400 flex items-center justify-between">
+                      <span className="truncate">
+                        {commandPreview ? `$ ${commandPreview}` : `端点: ${endpointPreview}`}
                       </span>
                     </div>
-                    <div className="text-xs text-slate-400 mt-0.5 line-clamp-1">
-                      {t.description || '标准 MCP 工具服务'}
+                  )}
+
+                  {/* 实时探测结果与暴露的工具列表徽章 */}
+                  {testInfo && (
+                    <div
+                      className={`p-2.5 rounded-xl border text-xs ${
+                        testInfo.success
+                          ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300'
+                          : 'bg-red-500/10 border-red-500/20 text-red-300'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 font-medium">
+                        {testInfo.success ? '🟢 握手探测成功: ' : '🔴 握手失败: '}
+                        <span>{testInfo.message}</span>
+                      </div>
+                      {testInfo.tools.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {testInfo.tools.map((tool, idx) => (
+                            <span
+                              key={idx}
+                              title={tool.description}
+                              className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-200 text-[10px] font-mono"
+                            >
+                              ⚙️ {tool.name}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                  </div>
+                  )}
                 </div>
-
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={() => handleToggleTool(t)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-                      t.is_enabled
-                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
-                        : 'bg-slate-800 text-slate-500 border border-slate-700'
-                    }`}
-                  >
-                    <CheckCircle className="w-3.5 h-3.5" />
-                    <span>{t.is_enabled ? '已启用' : '已停用'}</span>
-                  </button>
-
-                  <button
-                    onClick={() => handleDeleteTool(t.id)}
-                    className="p-1.5 rounded-lg hover:bg-red-500/10 text-slate-500 hover:text-red-400 transition-colors cursor-pointer"
-                    title="卸载 MCP 服务"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
 
       {/* ────────────────── 3. SKILLS CONFIG ────────────────── */}
       {activeTab === 'skill' && (
-        <div className="max-w-4xl space-y-6">
+        <div className="w-full space-y-6">
           <div className="flex items-center justify-between pb-4 border-b border-slate-800/80">
             <div>
               <h2 className="text-lg font-bold text-white flex items-center gap-2">
@@ -726,7 +1231,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <span>专业技能配置 (Agent Skills)</span>
               </h2>
               <p className="text-xs text-slate-400 mt-1">
-                管理已装载的智能体专业技能，输入框键入 `/` 即可触发，支持绑定专属 MCP 工具与提示词工程。
+                管理已装载的智能体专业技能，输入框键入 `/` 即可触发，支持深度绑定专属 MCP 工具与提示词工程。
               </p>
             </div>
 
@@ -734,7 +1239,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               {onNavigateToPlaza && (
                 <button
                   onClick={() => onNavigateToPlaza('skill')}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-950/60 hover:bg-amber-900/60 border border-amber-500/30 text-amber-300 text-xs font-semibold cursor-pointer"
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-950/60 hover:bg-amber-900/60 border border-amber-500/30 text-amber-300 text-xs font-semibold cursor-pointer transition-colors"
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
                   <span>前往 Skill 广场装载</span>
@@ -754,7 +1259,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     bound_tools: [],
                   });
                 }}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold shadow-md cursor-pointer"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold shadow-md cursor-pointer transition-colors"
               >
                 <Plus className="w-4 h-4" />
                 <span>创建自定义技能</span>
@@ -762,26 +1267,28 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
 
-          {/* 表单 */}
+          {/* 表单: 新建 / 编辑专业技能 */}
           {(isAddingSkill || editingSkill) && (
-            <form onSubmit={handleSaveSkill} className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-4">
-              <h3 className="text-sm font-bold text-white">
-                {editingSkill ? `编辑技能: /${editingSkill.code}` : '新建专业技能'}
+            <form onSubmit={handleSaveSkill} className="p-5 rounded-2xl bg-slate-900 border border-slate-800 space-y-4 shadow-xl">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                <span>{editingSkill ? `编辑技能: /${editingSkill.code}` : '新建专业技能'}</span>
               </h3>
+
               <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">技能名称</label>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">技能名称 *</label>
                   <input
                     type="text"
                     required
                     placeholder="如：全栈开发专家"
                     value={skillForm.name}
                     onChange={(e) => setSkillForm({ ...skillForm, name: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">快捷指令 (Slash Code)</label>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">快捷指令 (Slash Code) *</label>
                   <input
                     type="text"
                     required
@@ -789,7 +1296,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     disabled={!!editingSkill}
                     value={skillForm.code}
                     onChange={(e) => setSkillForm({ ...skillForm, code: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-200 disabled:opacity-50"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-200 disabled:opacity-50 focus:outline-none focus:border-amber-500"
                   />
                 </div>
                 <div>
@@ -798,42 +1305,113 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     type="text"
                     value={skillForm.category}
                     onChange={(e) => setSkillForm({ ...skillForm, category: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
                   />
                 </div>
+
                 <div className="col-span-3">
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">描述</label>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">技能简要描述</label>
                   <input
                     type="text"
                     value={skillForm.description}
                     onChange={(e) => setSkillForm({ ...skillForm, description: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200"
+                    placeholder="向用户概括说明该技能的工作场景与输出期望"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
                   />
                 </div>
+
+                {/* 核心: 绑定 MCP 工具选择器 (Bound Tools Selector) */}
+                <div className="col-span-3 p-3.5 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                        <Layers className="w-3.5 h-3.5 text-indigo-400" />
+                        <span>专属绑定 MCP 协议工具 (可选)</span>
+                      </span>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        当用户在会话中键入 /{skillForm.code || 'skill'} 触发该技能时，将优先向智能体注入所绑定的专属 MCP 服务。
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSkillForm({
+                            ...skillForm,
+                            bound_tools: tools.filter((t) => t.is_enabled).map((t) => t.name),
+                          })
+                        }
+                        className="text-[11px] text-indigo-400 hover:text-indigo-300"
+                      >
+                        全选
+                      </button>
+                      <span className="text-slate-700">|</span>
+                      <button
+                        type="button"
+                        onClick={() => setSkillForm({ ...skillForm, bound_tools: [] })}
+                        className="text-[11px] text-slate-400 hover:text-slate-300"
+                      >
+                        清空
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 pt-1">
+                    {tools.map((t) => {
+                      const isChecked =
+                        skillForm.bound_tools?.includes(t.name) ||
+                        skillForm.bound_tools?.includes(t.id) ||
+                        skillForm.bound_tools?.includes(t.tool_type);
+                      return (
+                        <div
+                          key={t.id}
+                          onClick={() => handleToggleBoundTool(t.name)}
+                          className={`flex items-center gap-2 p-2 rounded-xl border text-xs cursor-pointer select-none transition-all ${
+                            isChecked
+                              ? 'bg-indigo-600/15 border-indigo-500/50 text-indigo-200 font-medium'
+                              : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                          }`}
+                        >
+                          {isChecked ? (
+                            <CheckSquare className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                          ) : (
+                            <Square className="w-3.5 h-3.5 text-slate-600 shrink-0" />
+                          )}
+                          <span className="truncate">{t.name}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
                 <div className="col-span-3">
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">系统提示词 (System Prompt)</label>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">系统提示词 (System Prompt) *</label>
                   <textarea
                     rows={6}
+                    required
                     value={skillForm.system_prompt}
                     onChange={(e) => setSkillForm({ ...skillForm, system_prompt: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200"
+                    placeholder="输入该专业技能的详细角色人设、执行原则与标准输出框架..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 font-mono focus:outline-none focus:border-amber-500"
                   />
                 </div>
               </div>
-              <div className="flex items-center justify-end gap-3">
+
+              <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-800">
                 <button
                   type="button"
                   onClick={() => {
                     setIsAddingSkill(false);
                     setEditingSkill(null);
                   }}
-                  className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white"
+                  className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white transition-colors cursor-pointer"
                 >
                   取消
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold shadow-md cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold shadow-md cursor-pointer transition-colors"
                 >
                   保存技能
                 </button>
@@ -846,68 +1424,89 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             {skills.map((s) => (
               <div
                 key={s.id}
-                className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800/80 flex items-center justify-between"
+                className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800/80 hover:border-slate-750 transition-all space-y-3"
               >
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
-                    <Zap className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-bold text-white">{s.name}</span>
-                      <span className="text-xs text-amber-400 font-mono font-bold">/{s.code}</span>
-                      <span className="text-[10px] px-2 py-0.2 rounded-full bg-slate-800 text-slate-400">
-                        {s.category}
-                      </span>
-                      {s.is_preset && (
-                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300">
-                          预置
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
+                      <Zap className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-bold text-white">{s.name}</span>
+                        <span className="text-xs text-amber-400 font-mono font-bold">/{s.code}</span>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">
+                          {s.category}
                         </span>
-                      )}
+                        {s.is_preset && (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300">
+                            预置模版
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-slate-400 mt-0.5 line-clamp-1">
+                        {s.description}
+                      </div>
                     </div>
-                    <div className="text-xs text-slate-400 mt-0.5 line-clamp-1">
-                      {s.description}
-                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleToggleSkill(s)}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold cursor-pointer transition-all ${
+                        s.is_enabled
+                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                          : 'bg-slate-800 text-slate-500 border border-slate-700'
+                      }`}
+                    >
+                      <CheckCircle className="w-3.5 h-3.5" />
+                      <span>{s.is_enabled ? '已启用' : '已停用'}</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setEditingSkill(s);
+                        setIsAddingSkill(false);
+                        setSkillForm({
+                          name: s.name,
+                          code: s.code,
+                          category: s.category,
+                          description: s.description,
+                          system_prompt: s.system_prompt,
+                          bound_tools: s.bound_tools || [],
+                        });
+                      }}
+                      className="p-2 rounded-xl hover:bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                      title="编辑技能提示词与配置"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                    </button>
+
+                    <button
+                      onClick={() => handleDeleteSkill(s.id)}
+                      className="p-2 rounded-xl hover:bg-red-500/10 text-slate-500 hover:text-red-400 transition-colors cursor-pointer"
+                      title="删除此技能"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => handleToggleSkill(s)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold cursor-pointer ${
-                      s.is_enabled
-                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
-                        : 'bg-slate-800 text-slate-500 border border-slate-700'
-                    }`}
-                  >
-                    <CheckCircle className="w-3.5 h-3.5" />
-                    <span>{s.is_enabled ? '已启用' : '已停用'}</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      setEditingSkill(s);
-                      setSkillForm({
-                        name: s.name,
-                        code: s.code,
-                        category: s.category,
-                        description: s.description,
-                        system_prompt: s.system_prompt,
-                        bound_tools: s.bound_tools || [],
-                      });
-                    }}
-                    className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
-                  >
-                    <Edit2 className="w-4 h-4" />
-                  </button>
-
-                  <button
-                    onClick={() => handleDeleteSkill(s.id)}
-                    className="p-1.5 rounded-lg hover:bg-red-500/10 text-slate-500 hover:text-red-400 transition-colors cursor-pointer"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
+                {/* 绑定的 MCP 工具标签列表 */}
+                {s.bound_tools && s.bound_tools.length > 0 && (
+                  <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                    <span className="text-[10px] text-slate-500">绑定工具:</span>
+                    {s.bound_tools.map((bt, idx) => (
+                      <span
+                        key={idx}
+                        className="px-2 py-0.5 rounded-md bg-indigo-950/70 border border-indigo-800/40 text-indigo-300 text-[10px] font-mono flex items-center gap-1"
+                      >
+                        <Layers className="w-2.5 h-2.5" />
+                        <span>{bt}</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -916,7 +1515,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
       {/* ────────────────── 4. CHANNELS CONFIG (飞书/QQ/微信/钉钉) ────────────────── */}
       {activeTab === 'channels' && (
-        <div className="max-w-4xl space-y-6">
+        <div className="w-full space-y-6">
           <div className="flex items-center justify-between pb-4 border-b border-slate-800/80">
             <div>
               <h2 className="text-lg font-bold text-white flex items-center gap-2">
@@ -1079,7 +1678,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
       {/* ────────────────── 5. SCHEDULED TASKS CONFIG ────────────────── */}
       {activeTab === 'tasks' && (
-        <div className="max-w-4xl space-y-6">
+        <div className="w-full space-y-6">
           <div className="flex items-center justify-between pb-4 border-b border-slate-800/80">
             <div>
               <h2 className="text-lg font-bold text-white flex items-center gap-2">
@@ -1249,7 +1848,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
       {/* ────────────────── 6. KNOWLEDGE BASE SETTINGS ────────────────── */}
       {activeTab === 'knowledge' && (
-        <div className="max-w-4xl space-y-6">
+        <div className="w-full space-y-6">
           <div className="flex items-center justify-between pb-4 border-b border-slate-800/80">
             <div>
               <h2 className="text-lg font-bold text-white flex items-center gap-2">
@@ -1313,7 +1912,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
       {/* ────────────────── 7. GOVERNANCE & AUDIT ────────────────── */}
       {activeTab === 'governance' && (
-        <div className="max-w-4xl space-y-6">
+        <div className="w-full space-y-6">
           <div className="pb-4 border-b border-slate-800/80">
             <h2 className="text-lg font-bold text-white flex items-center gap-2">
               <Shield className="w-5 h-5 text-indigo-400" />

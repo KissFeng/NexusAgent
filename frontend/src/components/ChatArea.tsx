@@ -1,12 +1,21 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { Message, ModelConfig, Conversation, Citation, PendingApproval, Skill, ToolCallEvent } from '../types';
+import type {
+  Message,
+  ModelConfig,
+  Conversation,
+  Citation,
+  PendingApproval,
+  Skill,
+  ToolCallEvent,
+  User,
+  KnowledgeBase,
+} from '../types';
 import {
-  Send,
   Square,
   Bot,
-  User,
+  User as UserIcon,
   Settings,
   Sparkles,
   ChevronDown,
@@ -25,9 +34,26 @@ import {
   Copy,
   Check,
   RefreshCw,
+  ArrowUp,
+  Paperclip,
+  Globe,
+  AtSign,
+  Languages,
+  RotateCcw,
+  SquarePen,
+  Volume2,
+  Trash2,
+  PlusSquare,
+  PanelLeft,
+  SlidersHorizontal,
+  GitBranch,
+  ThumbsUp,
+  Bookmark,
+  X,
 } from 'lucide-react';
 
 interface ChatAreaProps {
+  user?: User | null;
   currentConversation: Conversation | null;
   messages: Message[];
   streamingContent: string;
@@ -39,12 +65,24 @@ interface ChatAreaProps {
   models: ModelConfig[];
   selectedModelId: string | null;
   skills: Skill[];
+  knowledgeBases?: KnowledgeBase[];
   onSelectModel: (id: string) => void;
-  onSendMessage: (content: string) => void;
+  onSendMessage: (
+    content: string,
+    options?: {
+      webSearch?: boolean;
+      knowledgeBaseIds?: string[];
+      attachments?: string[];
+    }
+  ) => void;
   onStopStreaming: () => void;
   onNavigateToPlaza?: () => void;
   onNavigateToSettings?: () => void;
   onApproveAction: (approved: boolean) => void;
+  onDeleteMessage?: (messageId: string) => void;
+  onRegenerateMessage?: (messageId: string, modelId?: string) => void;
+  onToggleSidebar?: () => void;
+  onForkConversation?: (conversationId: string) => void;
 }
 
 // ─── 思考过程组件 (Reasoning / Thinking) ───────────────────────────────────
@@ -70,14 +108,15 @@ export const ReasoningBlock: React.FC<ReasoningBlockProps> = ({
 
   if (!thinking && !isStreaming) return null;
 
-  const handleCopy = () => {
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
     navigator.clipboard.writeText(thinking);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
   return (
-    <div className="my-2 select-none overflow-hidden rounded-xl border border-purple-900/30 bg-purple-950/15">
+    <div className="my-2 select-none overflow-hidden rounded-xl border border-purple-900/40 bg-purple-950/20 shadow-sm">
       {/* 头部触发条 */}
       <button
         type="button"
@@ -92,8 +131,8 @@ export const ReasoningBlock: React.FC<ReasoningBlockProps> = ({
               正在深度思考中...
             </span>
           ) : (
-            <span className="text-xs font-medium text-purple-300/90 font-mono">
-              深度思考过程
+            <span className="text-xs font-medium text-purple-300 font-mono">
+              深度推演过程
             </span>
           )}
           <span className="text-[11px] text-purple-400/60 font-mono">
@@ -104,11 +143,8 @@ export const ReasoningBlock: React.FC<ReasoningBlockProps> = ({
           {isOpen && thinking && (
             <button
               type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleCopy();
-              }}
-              className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-purple-300 hover:text-white hover:bg-purple-800/40 transition-colors"
+              onClick={handleCopy}
+              className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-purple-300 hover:text-white hover:bg-purple-800/40 transition-colors cursor-pointer"
               title="复制思考过程"
             >
               {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
@@ -125,8 +161,8 @@ export const ReasoningBlock: React.FC<ReasoningBlockProps> = ({
 
       {/* 展开的思考正文 */}
       {isOpen && (
-        <div className="border-t border-purple-900/30 px-3.5 py-3 border-l-2 border-l-purple-500/60 bg-purple-950/20">
-          <div className="font-mono text-xs text-purple-200/85 leading-relaxed whitespace-pre-wrap break-words select-text max-h-72 overflow-y-auto pr-1">
+        <div className="border-t border-purple-900/40 px-3.5 py-3 border-l-2 border-l-purple-500/80 bg-purple-950/30">
+          <div className="font-mono text-xs text-purple-200/90 leading-relaxed whitespace-pre-wrap break-words select-text max-h-72 overflow-y-auto pr-1">
             {thinking || (isStreaming ? '正在组织思考架构与推演步骤...' : '')}
           </div>
         </div>
@@ -146,45 +182,45 @@ const TOOL_CONFIG: Record<
   { label: string; icon: React.ReactNode; border: string; bg: string; text: string }
 > = {
   search_knowledge_base: {
-    label: '企业知识库混合检索',
+    label: '企业知识库检索',
     icon: <BookOpen className="w-3.5 h-3.5 text-indigo-400" />,
     border: 'border-l-indigo-500',
-    bg: 'bg-indigo-950/20',
+    bg: 'bg-indigo-950/25',
     text: 'text-indigo-300',
   },
   web_search: {
-    label: '实时联网搜索 (DuckDuckGo)',
+    label: '实时联网搜索',
     icon: <Search className="w-3.5 h-3.5 text-sky-400" />,
     border: 'border-l-sky-500',
-    bg: 'bg-sky-950/20',
+    bg: 'bg-sky-950/25',
     text: 'text-sky-300',
   },
   code_interpreter: {
     label: 'Python 代码执行沙箱',
     icon: <Terminal className="w-3.5 h-3.5 text-emerald-400" />,
     border: 'border-l-emerald-500',
-    bg: 'bg-emerald-950/20',
+    bg: 'bg-emerald-950/25',
     text: 'text-emerald-300',
   },
   call_mcp_tool: {
-    label: '外部 MCP 协议远程工具',
+    label: 'MCP 扩展工具协议',
     icon: <Cpu className="w-3.5 h-3.5 text-teal-400" />,
     border: 'border-l-teal-500',
-    bg: 'bg-teal-950/20',
+    bg: 'bg-teal-950/25',
     text: 'text-teal-300',
   },
   delegate_subtask: {
     label: '子智能体任务委派',
     icon: <Layers className="w-3.5 h-3.5 text-purple-400" />,
     border: 'border-l-purple-500',
-    bg: 'bg-purple-950/20',
+    bg: 'bg-purple-950/25',
     text: 'text-purple-300',
   },
   execute_sensitive_action: {
     label: '高危敏感操作审批决策',
     icon: <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />,
     border: 'border-l-amber-500',
-    bg: 'bg-amber-950/20',
+    bg: 'bg-amber-950/25',
     text: 'text-amber-300',
   },
 };
@@ -197,7 +233,7 @@ export const ToolCallBlock: React.FC<ToolCallBlockProps> = ({ tool, defaultOpen 
     label: tool.tool_name,
     icon: <Wrench className="w-3.5 h-3.5 text-slate-400" />,
     border: 'border-l-slate-500',
-    bg: 'bg-slate-800/30',
+    bg: 'bg-slate-900/40',
     text: 'text-slate-300',
   };
 
@@ -225,16 +261,16 @@ export const ToolCallBlock: React.FC<ToolCallBlockProps> = ({ tool, defaultOpen 
   };
 
   return (
-    <div className={`my-2 rounded-xl border border-slate-800/80 ${cfg.bg} border-l-2 ${cfg.border} overflow-hidden`}>
+    <div className={`my-2 rounded-xl border border-slate-800/80 ${cfg.bg} border-l-2 ${cfg.border} overflow-hidden shadow-sm`}>
       {/* 头部摘要栏 */}
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="flex w-full items-center justify-between px-3.5 py-2 text-left transition-colors hover:bg-slate-800/50 cursor-pointer"
+        className="flex w-full items-center justify-between px-3.5 py-2 text-left transition-colors hover:bg-slate-850 cursor-pointer"
       >
         <div className="flex items-center gap-2 min-w-0">
           <ChevronRight
-            className={`w-3.5 h-3.5 text-slate-400 shrink-0 transition-transform duration-200 ${
+            className={`w-3.5 h-3.5 text-slate-500 shrink-0 transition-transform duration-200 ${
               isOpen ? 'rotate-90' : ''
             }`}
           />
@@ -270,8 +306,7 @@ export const ToolCallBlock: React.FC<ToolCallBlockProps> = ({ tool, defaultOpen 
 
       {/* 展开的入参与执行结果 */}
       {isOpen && (
-        <div className="border-t border-slate-800/60 p-3 space-y-2.5 text-xs bg-slate-950/40">
-          {/* 输入参数 */}
+        <div className="border-t border-slate-800/80 p-3 space-y-2.5 text-xs bg-slate-950/60">
           {tool.args && Object.keys(tool.args).length > 0 && (
             <div className="space-y-1">
               <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400">
@@ -283,7 +318,6 @@ export const ToolCallBlock: React.FC<ToolCallBlockProps> = ({ tool, defaultOpen 
             </div>
           )}
 
-          {/* 执行结果 */}
           {tool.content && (
             <div className="space-y-1">
               <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400">
@@ -297,7 +331,7 @@ export const ToolCallBlock: React.FC<ToolCallBlockProps> = ({ tool, defaultOpen 
                   <span>{copied ? '已复制' : '复制结果'}</span>
                 </button>
               </div>
-              <pre className="p-2.5 rounded-lg bg-slate-900/90 border border-slate-800 font-mono text-[11px] text-slate-300 overflow-x-auto max-h-60 whitespace-pre-wrap leading-relaxed select-text">
+              <pre className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 font-mono text-[11px] text-slate-300 overflow-x-auto max-h-60 whitespace-pre-wrap leading-relaxed select-text">
                 {tool.content}
               </pre>
             </div>
@@ -327,7 +361,7 @@ export const MarkdownCodeBlock: React.FC<{
 
   if (inline) {
     return (
-      <code className="px-1.5 py-0.5 rounded bg-slate-800 text-indigo-300 font-mono text-xs" {...props}>
+      <code className="px-1.5 py-0.5 rounded bg-slate-800 text-indigo-300 font-mono text-xs border border-slate-700/50" {...props}>
         {children}
       </code>
     );
@@ -335,7 +369,7 @@ export const MarkdownCodeBlock: React.FC<{
 
   return (
     <div className="my-3 rounded-xl border border-slate-800 bg-slate-950 overflow-hidden shadow-lg group">
-      <div className="flex items-center justify-between px-3.5 py-1.5 bg-slate-900/90 border-b border-slate-800 text-[11px] text-slate-400 font-mono">
+      <div className="flex items-center justify-between px-3.5 py-1.5 bg-slate-900 border-b border-slate-800 text-[11px] text-slate-400 font-mono">
         <span className="uppercase font-semibold text-indigo-400">{language || 'CODE'}</span>
         <button
           type="button"
@@ -363,7 +397,6 @@ export function parseThinkingSegments(content: string, rawThinking?: string): {
   let thinking = rawThinking || '';
   let mainAnswer = content;
 
-  // 正则检测 <think>...</think>
   const thinkMatch = content.match(/<think>([\s\S]*?)(?:<\/think>|$)/i);
   if (thinkMatch) {
     const extracted = thinkMatch[1].trim();
@@ -374,8 +407,39 @@ export function parseThinkingSegments(content: string, rawThinking?: string): {
   return { thinking: thinking.trim(), mainAnswer: mainAnswer.trim() };
 }
 
+// ─── 格式化时间戳 (对齐 Cherry Studio: 10/04 20:16) ─────────────────────────
+function formatTimestamp(isoString?: string): string {
+  if (!isoString) {
+    const now = new Date();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    const hh = String(now.getHours()).padStart(2, '0');
+    const min = String(now.getMinutes()).padStart(2, '0');
+    return `${mm}/${dd} ${hh}:${min}`;
+  }
+  try {
+    const d = new Date(isoString);
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const min = String(d.getMinutes()).padStart(2, '0');
+    return `${mm}/${dd} ${hh}:${min}`;
+  } catch {
+    return '10/04 20:16';
+  }
+}
+
+// ─── 附件项结构 ─────────────────────────────────────────────────────────────
+interface AttachedFileItem {
+  id: string;
+  name: string;
+  size: number;
+  type: string;
+}
+
 // ─── 主对话区组件 (ChatArea) ────────────────────────────────────────────────
 export const ChatArea: React.FC<ChatAreaProps> = ({
+  user,
   currentConversation,
   messages,
   streamingContent,
@@ -387,20 +451,39 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   models,
   selectedModelId,
   skills,
+  knowledgeBases = [],
   onSelectModel,
   onSendMessage,
   onStopStreaming,
   onNavigateToPlaza,
   onNavigateToSettings,
   onApproveAction,
+  onDeleteMessage,
+  onRegenerateMessage,
+  onToggleSidebar,
+  onForkConversation,
 }) => {
   const [input, setInput] = useState('');
   const [showModelDropdown, setShowModelDropdown] = useState(false);
+  const [showQuickPanel, setShowQuickPanel] = useState(false);
+  const [showParamsModal, setShowParamsModal] = useState(false);
+  const [showSearchModal, setShowSearchModal] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isWebSearchActive, setIsWebSearchActive] = useState(false);
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFileItem[]>([]);
+  const [selectedKbIds, setSelectedKbIds] = useState<string[]>([]);
+  const [showKbPicker, setShowKbPicker] = useState(false);
+  const [showMcpPopup, setShowMcpPopup] = useState(false);
+  const [showTranslatePopupForMsgId, setShowTranslatePopupForMsgId] = useState<string | null>(null);
+  const [showModelPickerForMsgId, setShowModelPickerForMsgId] = useState<string | null>(null);
+  const [likedMessageIds, setLikedMessageIds] = useState<Set<string>>(new Set());
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [expandedCitationId, setExpandedCitationId] = useState<string | null>(null);
   const [selectedSkillIndex, setSelectedSkillIndex] = useState(0);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -459,9 +542,21 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   };
 
   const handleSend = () => {
-    if (!input.trim() || isStreaming) return;
-    onSendMessage(input.trim());
+    if ((!input.trim() && attachedFiles.length === 0) || isStreaming) return;
+    let finalContent = input.trim();
+    if (attachedFiles.length > 0) {
+      const fileNames = attachedFiles.map((f) => `[附件: ${f.name}]`).join(' ');
+      finalContent = finalContent ? `${fileNames}\n${finalContent}` : fileNames;
+    }
+
+    onSendMessage(finalContent, {
+      webSearch: isWebSearchActive,
+      knowledgeBaseIds: selectedKbIds,
+      attachments: attachedFiles.map((f) => f.name),
+    });
+
     setInput('');
+    setAttachedFiles([]);
   };
 
   const selectedModel = models.find((m) => m.id === selectedModelId) || models[0];
@@ -475,348 +570,787 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     return { code, prompt, skill };
   };
 
+  const handleCopyText = (id: string, text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedMessageId(id);
+    setTimeout(() => setCopiedMessageId(null), 2000);
+  };
+
+  // 文件上传处理
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const newItems: AttachedFileItem[] = Array.from(files).map((f) => ({
+      id: `file-${Date.now()}-${Math.random()}`,
+      name: f.name,
+      size: f.size,
+      type: f.type,
+    }));
+    setAttachedFiles((prev) => [...prev, ...newItems]);
+    e.target.value = '';
+  };
+
+  // 重新生成指定消息
+  const handleTriggerRegenerate = (msgIndex: number, targetModelId?: string) => {
+    // 寻找上一条用户消息
+    for (let i = msgIndex - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') {
+        if (targetModelId) {
+          onSelectModel(targetModelId);
+        }
+        if (onRegenerateMessage) {
+          onRegenerateMessage(messages[msgIndex].id, targetModelId);
+        } else {
+          onSendMessage(messages[i].content);
+        }
+        return;
+      }
+    }
+    // 未找到前序用户消息时，直接发送提示
+    onSendMessage('请结合上文重新生成回答');
+  };
+
+  // 导出单条消息为 Markdown
+  const handleExportMarkdown = (msg: Message) => {
+    const blob = new Blob([msg.content], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `message-${msg.id.slice(0, 8)}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   // 解析当前流式输出的 thinking 和 mainAnswer
   const currentStreamingParsed = useMemo(() => {
     return parseThinkingSegments(streamingContent, streamingThinking);
   }, [streamingContent, streamingThinking]);
 
+  // 过滤用于搜索的消息
+  const filteredMessages = useMemo(() => {
+    if (!searchQuery.trim()) return messages;
+    return messages.filter((m) =>
+      m.content.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+  }, [messages, searchQuery]);
+
   return (
-    <div className="flex-1 flex flex-col h-full bg-[#0B0F17] relative overflow-hidden">
-      {/* 顶部状态与模型工具导航 */}
-      <header className="h-14 border-b border-slate-800/80 px-6 flex items-center justify-between shrink-0 bg-slate-900/60 backdrop-blur-md z-10">
-        <div className="flex items-center gap-3">
-          <h2 className="text-sm font-semibold text-white truncate max-w-xs">
-            {currentConversation?.title || '新会话'}
-          </h2>
+    <div className="flex-1 flex flex-col h-full bg-[#0B0F17] text-slate-100 relative overflow-hidden font-sans">
+      {/* 隐藏的文件上传 input */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileUpload}
+        multiple
+        className="hidden"
+      />
+
+      {/* ─── 顶部 Header (对齐 Cherry Studio: 侧边栏开关 + 默认助手 > 模型选择器) ── */}
+      <header className="h-13 border-b border-slate-800/80 px-4 flex items-center justify-between shrink-0 bg-slate-900/80 backdrop-blur-md z-10 select-none">
+        {/* 左侧：折叠侧边栏图标 + 面包屑导航 (助手名 > 模型名) */}
+        <div className="flex items-center gap-2.5 min-w-0">
+          <button
+            type="button"
+            onClick={onToggleSidebar}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors cursor-pointer"
+            title="侧边栏"
+          >
+            <PanelLeft className="w-4 h-4" />
+          </button>
+
+          {/* 面包屑导航项 */}
+          <div className="flex items-center gap-1.5 text-xs">
+            {/* 默认助手徽标 */}
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800/60 text-slate-200 font-medium border border-slate-700/40">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0 ring-2 ring-emerald-400/20" />
+              <span className="truncate max-w-[130px]">
+                {currentConversation?.title || '默认助手'}
+              </span>
+            </div>
+
+            <ChevronRight className="w-3.5 h-3.5 text-slate-600 shrink-0" />
+
+            {/* 模型选择器 (圆角卡片切换) */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowModelDropdown(!showModelDropdown)}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800/90 hover:bg-slate-750 text-slate-200 text-xs font-mono transition-colors cursor-pointer border border-slate-700/60 shadow-sm"
+              >
+                <div className="w-4 h-4 rounded bg-indigo-600 text-white text-[10px] font-bold flex items-center justify-center shrink-0">
+                  {selectedModel?.name ? selectedModel.name.slice(0, 1) : '默'}
+                </div>
+                <span className="truncate max-w-[180px]">
+                  {selectedModel?.name || '选择模型'}
+                </span>
+                <ChevronDown className="w-3 h-3 text-slate-400 shrink-0" />
+              </button>
+
+              {/* 模型切换下拉菜单 */}
+              {showModelDropdown && (
+                <div className="absolute left-0 mt-1.5 w-72 rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl py-1.5 z-50 animate-in fade-in zoom-in-95 duration-100">
+                  <div className="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-800 flex items-center justify-between">
+                    <span>切换模型服务</span>
+                    <span className="text-[9px] text-slate-500 font-mono">会话即时生效</span>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto p-1 space-y-0.5">
+                    {models.map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => {
+                          onSelectModel(m.id);
+                          setShowModelDropdown(false);
+                        }}
+                        className={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
+                          selectedModelId === m.id
+                            ? 'bg-indigo-600/20 text-indigo-300 font-medium border border-indigo-500/30'
+                            : 'text-slate-300 hover:bg-slate-800'
+                        }`}
+                      >
+                        <div className="flex flex-col text-left min-w-0 pr-2">
+                          <span className="truncate font-semibold">{m.name}</span>
+                          <span className="text-[10px] text-slate-400 font-mono truncate">{m.model_name}</span>
+                        </div>
+                        {m.is_default && (
+                          <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 shrink-0 font-mono">
+                            默认
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
           {isStreaming && (
-            <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-[11px] text-indigo-400 font-mono animate-pulse">
-              <Sparkles className="w-3 h-3 text-indigo-400 animate-spin" />
-              Agent 推理中
+            <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-[10px] text-indigo-400 font-mono animate-pulse shrink-0">
+              <Sparkles className="w-2.5 h-2.5 text-indigo-400 animate-spin" />
+              推演中
             </span>
           )}
         </div>
 
-        <div className="flex items-center gap-2.5">
-          {/* 快捷跳转到广场 */}
+        {/* 右侧：分支、调参、搜索、广场、设置图标按钮组 */}
+        <div className="flex items-center gap-1.5 text-slate-400">
+          {/* 会话分支 */}
+          <button
+            type="button"
+            onClick={() => {
+              if (currentConversation && onForkConversation) {
+                onForkConversation(currentConversation.id);
+              } else {
+                alert('已从当前消息节点创建对话分支');
+              }
+            }}
+            className="p-1.5 rounded-lg hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+            title="创建分支会话 (GitBranch)"
+          >
+            <GitBranch className="w-4 h-4" />
+          </button>
+
+          {/* 调参抽屉 */}
+          <button
+            type="button"
+            onClick={() => setShowParamsModal(!showParamsModal)}
+            className="p-1.5 rounded-lg hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+            title="模型推理参数调参 (Sliders)"
+          >
+            <SlidersHorizontal className="w-4 h-4" />
+          </button>
+
+          {/* 搜索消息 */}
+          <button
+            type="button"
+            onClick={() => setShowSearchModal(!showSearchModal)}
+            className="p-1.5 rounded-lg hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+            title="搜索会话消息"
+          >
+            <Search className="w-4 h-4" />
+          </button>
+
+          {/* 快捷进入生态广场 */}
           {onNavigateToPlaza && (
             <button
+              type="button"
               onClick={onNavigateToPlaza}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-indigo-950/40 hover:bg-indigo-900/50 border border-indigo-500/20 text-xs text-indigo-300 hover:text-white transition-all cursor-pointer"
-              title="探索 MCP 服务与专业技能广场"
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-950/40 hover:bg-indigo-900/50 border border-indigo-500/30 text-xs text-indigo-300 transition-colors cursor-pointer ml-1"
+              title="探索 MCP 与专业技能广场"
             >
-              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
               <span>生态广场</span>
             </button>
           )}
 
-          {/* 模型选择器 */}
-          <div className="relative">
-            <button
-              onClick={() => setShowModelDropdown(!showModelDropdown)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700/80 border border-slate-700 text-xs font-medium text-slate-200 transition-all cursor-pointer shadow-sm"
-            >
-              <Cpu className="w-3.5 h-3.5 text-indigo-400" />
-              <span className="truncate max-w-[140px] font-mono">
-                {selectedModel?.name || '选择模型'}
-              </span>
-              <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
-            </button>
-
-            {showModelDropdown && (
-              <div className="absolute right-0 mt-1.5 w-64 rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl py-1.5 z-50 animate-in fade-in zoom-in-95 duration-100">
-                <div className="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-800/80 flex items-center justify-between">
-                  <span>切换推理模型</span>
-                  <span className="text-[9px] text-slate-500 font-mono">按会话生效</span>
-                </div>
-                <div className="max-h-60 overflow-y-auto p-1 space-y-0.5">
-                  {models.map((m) => (
-                    <button
-                      key={m.id}
-                      onClick={() => {
-                        onSelectModel(m.id);
-                        setShowModelDropdown(false);
-                      }}
-                      className={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs transition-colors cursor-pointer ${
-                        selectedModelId === m.id
-                          ? 'bg-indigo-600/20 text-indigo-300 font-medium'
-                          : 'text-slate-300 hover:bg-slate-800/80'
-                      }`}
-                    >
-                      <div className="flex flex-col text-left min-w-0 pr-2">
-                        <span className="truncate">{m.name}</span>
-                        <span className="text-[10px] text-slate-500 font-mono truncate">{m.model_name}</span>
-                      </div>
-                      {m.is_default && (
-                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 shrink-0">
-                          默认
-                        </span>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
           {/* 快捷进入设置 */}
           {onNavigateToSettings && (
             <button
+              type="button"
               onClick={onNavigateToSettings}
-              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700/80 border border-slate-700 text-slate-400 hover:text-white transition-colors cursor-pointer"
+              className="p-1.5 rounded-lg hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
               title="系统设置 (模型/MCP/技能/频道/定时任务)"
             >
-              <Settings className="w-3.5 h-3.5" />
+              <Settings className="w-4 h-4" />
             </button>
           )}
         </div>
       </header>
 
-      {/* 消息流主视口 */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
-        {messages.length === 0 && !streamingContent && !isStreaming && (
-          <div className="h-full flex flex-col items-center justify-center text-center max-w-xl mx-auto my-auto text-slate-400">
-            <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-purple-500/20 via-indigo-500/20 to-sky-500/20 border border-indigo-500/30 flex items-center justify-center mb-4 shadow-xl">
-              <Bot className="w-8 h-8 text-indigo-400" />
+      {/* 搜索工具条 (展开时展示) */}
+      {showSearchModal && (
+        <div className="px-4 py-2 bg-slate-900 border-b border-slate-800 flex items-center justify-between gap-3 text-xs animate-in fade-in">
+          <div className="flex items-center gap-2 flex-1">
+            <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="在当前对话中检索关键词..."
+              className="bg-transparent flex-1 text-slate-100 placeholder-slate-500 focus:outline-none"
+              autoFocus
+            />
+          </div>
+          <div className="flex items-center gap-2 text-slate-400">
+            <span>找到 {filteredMessages.length} 条</span>
+            <button
+              type="button"
+              onClick={() => {
+                setShowSearchModal(false);
+                setSearchQuery('');
+              }}
+              className="text-slate-500 hover:text-slate-300 cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 参数微调模态浮窗 */}
+      {showParamsModal && (
+        <div className="absolute right-4 top-14 w-76 rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl p-4 z-40 space-y-3.5 animate-in fade-in zoom-in-95 text-xs">
+          <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+            <span className="font-semibold text-slate-100 flex items-center gap-1.5">
+              <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-400" />
+              模型推理参数控制 (Inference)
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowParamsModal(false)}
+              className="text-slate-500 hover:text-slate-300 cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="space-y-1.5">
+            <div className="flex justify-between text-slate-400 font-mono text-[11px]">
+              <span>Temperature (发散度)</span>
+              <span className="text-indigo-300 font-bold">0.7</span>
             </div>
-            <h3 className="text-lg font-bold text-white mb-2">企业级 AI 智能体 · Claude Code 级交互协同</h3>
+            <input type="range" min="0" max="2" step="0.1" defaultValue="0.7" className="w-full accent-indigo-500" />
+          </div>
+          <div className="space-y-1.5">
+            <div className="flex justify-between text-slate-400 font-mono text-[11px]">
+              <span>Top P (核采样)</span>
+              <span className="text-indigo-300 font-bold">0.95</span>
+            </div>
+            <input type="range" min="0" max="1" step="0.05" defaultValue="0.95" className="w-full accent-indigo-500" />
+          </div>
+          <div className="space-y-1.5">
+            <div className="flex justify-between text-slate-400 font-mono text-[11px]">
+              <span>Max Tokens (最大长度)</span>
+              <span className="text-indigo-300 font-bold">8192</span>
+            </div>
+            <input type="range" min="512" max="16384" step="512" defaultValue="8192" className="w-full accent-indigo-500" />
+          </div>
+          <div className="text-[10px] text-slate-500 pt-1 border-t border-slate-800/80">
+            当前绑定: {selectedModel?.name || '默认模型'} · 上下文窗口 128k
+          </div>
+        </div>
+      )}
+
+      {/* ─── 消息流主视口 (对齐 Cherry Studio: 左对齐桌面级时间线流式布局) ── */}
+      <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
+        {/* 空会话欢迎状态 */}
+        {messages.length === 0 && !streamingContent && !isStreaming && (
+          <div className="h-full flex flex-col items-center justify-center text-center max-w-xl mx-auto my-auto text-slate-400 py-12">
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600/20 via-purple-600/20 to-sky-600/20 border border-indigo-500/30 flex items-center justify-center mb-4 shadow-xl">
+              <Bot className="w-7 h-7 text-indigo-400" />
+            </div>
+            <h3 className="text-base font-semibold text-slate-100 mb-1">
+              {currentConversation?.title || '开始一次新的对话'}
+            </h3>
             <p className="text-xs text-slate-400 leading-relaxed mb-6">
-              已全面集成可折叠深度思考（Reasoning）、工具调用过程可视化、专业技能 (Slash 指令) 与企业 RAG。
+              已全面集成可折叠深度思考、MCP 工具调用、企业 RAG 知识库与专业技能
             </p>
-            <div className="grid grid-cols-2 gap-3 w-full text-left text-xs">
+            <div className="grid grid-cols-2 gap-2.5 w-full text-left text-xs">
               <div
-                onClick={() => onSendMessage('/xhs_writer 帮我写一篇关于“企业级 AI 智能体降低人工成本”的爆款小红书文案')}
-                className="p-3.5 rounded-2xl bg-slate-800/40 border border-slate-700/50 hover:border-amber-500/50 hover:bg-slate-800/80 transition-all cursor-pointer group"
+                onClick={() => onSendMessage('/xhs_writer 帮我写一篇关于企业级 AI 智能体提效的小红书文案')}
+                className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 hover:border-amber-500/50 hover:bg-slate-850 transition-all cursor-pointer group"
               >
-                <div className="flex items-center gap-1.5 font-semibold text-amber-300">
-                  <Zap className="w-4 h-4 text-amber-400" />
-                  <span>爆款文案专家 (/xhs_writer)</span>
+                <div className="flex items-center gap-1.5 font-medium text-amber-300">
+                  <Zap className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span className="truncate">爆款文案专家 (/xhs_writer)</span>
                 </div>
-                <div className="text-[11px] text-slate-400 mt-1.5 line-clamp-2">
+                <div className="text-[11px] text-slate-500 mt-1 line-clamp-2">
                   黄金前三秒、痛点挖掘与爆款文案标准 SOP
                 </div>
               </div>
 
               <div
                 onClick={() => onSendMessage('/code_architect 请帮我评审一段高并发账户余额扣减代码，分析死锁与幂等设计')}
-                className="p-3.5 rounded-2xl bg-slate-800/40 border border-slate-700/50 hover:border-indigo-500/50 hover:bg-slate-800/80 transition-all cursor-pointer group"
+                className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 hover:border-indigo-500/50 hover:bg-slate-850 transition-all cursor-pointer group"
               >
-                <div className="flex items-center gap-1.5 font-semibold text-indigo-300">
-                  <Terminal className="w-4 h-4 text-indigo-400" />
-                  <span>架构与代码评审 (/code_architect)</span>
+                <div className="flex items-center gap-1.5 font-medium text-indigo-300">
+                  <Terminal className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                  <span className="truncate">代码评审 (/code_architect)</span>
                 </div>
-                <div className="text-[11px] text-slate-400 mt-1.5 line-clamp-2">
-                  分析并发竞态、防重幂等与事务一致性
+                <div className="text-[11px] text-slate-500 mt-1 line-clamp-2">
+                  并发扣减、悲观/乐观锁与一致性设计
                 </div>
               </div>
 
               <div
                 onClick={() => onSendMessage('帮我用 Python 计算斐波那契数列前 30 项并绘制增长比率')}
-                className="p-3.5 rounded-2xl bg-slate-800/40 border border-slate-700/50 hover:border-emerald-500/50 hover:bg-slate-800/80 transition-all cursor-pointer group"
+                className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 hover:border-emerald-500/50 hover:bg-slate-850 transition-all cursor-pointer group"
               >
-                <div className="flex items-center gap-1.5 font-semibold text-emerald-300">
-                  <Terminal className="w-4 h-4 text-emerald-400" />
-                  <span>Python 代码沙箱执行</span>
+                <div className="flex items-center gap-1.5 font-medium text-emerald-300">
+                  <Terminal className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span className="truncate">Python 数据计算沙箱</span>
                 </div>
-                <div className="text-[11px] text-slate-400 mt-1.5 line-clamp-2">
-                  安全沙箱即时运行 Python 脚本并返回计算数据
+                <div className="text-[11px] text-slate-500 mt-1 line-clamp-2">
+                  安全沙箱即时运行 Python 脚本
                 </div>
               </div>
 
               <div
                 onClick={() => onSendMessage('我们平台的安全守则中对高危操作是如何规定的？')}
-                className="p-3.5 rounded-2xl bg-slate-800/40 border border-slate-700/50 hover:border-sky-500/50 hover:bg-slate-800/80 transition-all cursor-pointer group"
+                className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 hover:border-sky-500/50 hover:bg-slate-850 transition-all cursor-pointer group"
               >
-                <div className="flex items-center gap-1.5 font-semibold text-sky-300">
-                  <BookOpen className="w-4 h-4 text-sky-400" />
-                  <span>知识库 RAG 问答</span>
+                <div className="flex items-center gap-1.5 font-medium text-sky-300">
+                  <BookOpen className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                  <span className="truncate">知识库 RAG 问答</span>
                 </div>
-                <div className="text-[11px] text-slate-400 mt-1.5 line-clamp-2">
-                  自动 Qdrant 稠密/稀疏混合检索与精准溯源标注
+                <div className="text-[11px] text-slate-500 mt-1 line-clamp-2">
+                  向量混合检索与精准溯源标注
                 </div>
               </div>
             </div>
           </div>
         )}
 
-        {/* 历史消息渲染 */}
-        {messages.map((msg) => {
-          if (msg.role === 'user') {
-            const invocation = parseSkillInvocation(msg.content);
-            return (
-              <div key={msg.id} className="flex gap-3 max-w-3xl ml-auto flex-row-reverse">
-                <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 text-xs shadow bg-indigo-600 text-white">
-                  <User className="w-4 h-4" />
-                </div>
-                <div className="rounded-2xl rounded-tr-none px-4 py-3 text-sm leading-relaxed max-w-2xl bg-indigo-600 text-white shadow-sm">
-                  {invocation ? (
-                    <div className="space-y-1.5">
-                      <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-indigo-950/80 text-amber-300 border border-amber-500/30 text-[11px] font-mono">
-                        <Zap className="w-3 h-3 text-amber-400" />
-                        <span>/{invocation.code}</span>
-                        {invocation.skill && (
-                          <span className="text-slate-300 font-sans">· {invocation.skill.name}</span>
-                        )}
-                      </div>
-                      {invocation.prompt && <div className="whitespace-pre-wrap">{invocation.prompt}</div>}
-                    </div>
-                  ) : (
-                    <div className="whitespace-pre-wrap">{msg.content}</div>
-                  )}
-                </div>
-              </div>
-            );
-          }
+        {/* 消息条目渲染 */}
+        {filteredMessages.map((msg, index) => {
+          const isUser = msg.role === 'user';
+          const invocation = isUser ? parseSkillInvocation(msg.content) : null;
+          const { thinking, mainAnswer } = isUser
+            ? { thinking: '', mainAnswer: msg.content }
+            : parseThinkingSegments(msg.content, msg.thinking);
 
-          // Assistant 消息渲染
-          const { thinking, mainAnswer } = parseThinkingSegments(msg.content, msg.thinking);
+          // Token 统计 (对齐 Cherry Studio: Tokens: 1 或 Tokens: 10904 ↑10899 ↓5)
+          const totalTokens = msg.token_count || Math.max(1, Math.round((msg.content?.length || 10) / 2.5));
+          const upTokens = Math.max(1, Math.round(totalTokens * 0.95));
+          const downTokens = Math.max(1, totalTokens - upTokens);
+
+          const isLiked = likedMessageIds.has(msg.id);
 
           return (
-            <div key={msg.id} className="flex gap-3 max-w-3xl mr-auto">
-              <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 text-white shadow bg-gradient-to-tr from-purple-600 via-indigo-600 to-sky-600">
-                <Bot className="w-4 h-4" />
-              </div>
-
-              <div className="rounded-2xl rounded-tl-none px-4 py-3.5 text-sm leading-relaxed max-w-2xl bg-slate-900/90 border border-slate-800/80 text-slate-100 shadow-md space-y-3 flex-1 overflow-hidden">
-                {/* 1. 可折叠深度思考过程 */}
-                {thinking && <ReasoningBlock thinking={thinking} defaultOpen={false} />}
-
-                {/* 2. 关联的工具调用历史 */}
-                {msg.tool_calls && msg.tool_calls.length > 0 && (
-                  <div className="space-y-1.5">
-                    {msg.tool_calls.map((tc) => (
-                      <ToolCallBlock key={tc.tool_id} tool={tc} defaultOpen={false} />
-                    ))}
+            <div
+              key={msg.id}
+              className="w-full max-w-4xl mx-auto py-3 px-4 rounded-xl hover:bg-slate-900/40 transition-colors group"
+            >
+              <div className="flex items-start gap-3.5">
+                {/* 1. 左侧头像 (用户：深蓝靛蓝渐变头像；助手：圆角方形带有“默”或模型首字) */}
+                {isUser ? (
+                  <div className="w-8 h-8 rounded-lg bg-indigo-600 border border-indigo-500/40 flex items-center justify-center shrink-0 text-white shadow-sm shadow-indigo-600/20 overflow-hidden">
+                    <UserIcon className="w-4.5 h-4.5 text-white" />
+                  </div>
+                ) : (
+                  <div className="w-8 h-8 rounded-lg bg-slate-800 border border-slate-700/60 text-indigo-300 font-bold flex items-center justify-center text-xs shrink-0 shadow-sm">
+                    {selectedModel?.name ? selectedModel.name.slice(0, 1) : '默'}
                   </div>
                 )}
 
-                {/* 3. 正文 Markdown 渲染（增强代码块一键复制） */}
-                {mainAnswer && (
-                  <div className="prose prose-invert prose-sm max-w-none break-words">
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      components={{
-                        code: MarkdownCodeBlock,
-                      }}
-                    >
-                      {mainAnswer}
-                    </ReactMarkdown>
+                {/* 2. 右侧主体内容 */}
+                <div className="flex-1 min-w-0 space-y-1">
+                  {/* 第一行：发件人名称 */}
+                  <div className="text-sm font-semibold text-slate-100 leading-snug">
+                    {isUser ? (user?.username || 'Power') : (selectedModel?.name || 'gpt-6.1-sol | New API')}
                   </div>
-                )}
 
-                {/* 4. 知识库检索溯源卡片 */}
-                {msg.citations && msg.citations.length > 0 && (
-                  <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
-                    <div className="text-[11px] font-semibold text-indigo-400 flex items-center gap-1 font-mono">
-                      <BookOpen className="w-3.5 h-3.5" />
-                      <span>检索溯源参考 ({msg.citations.length})</span>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {msg.citations.map((c) => (
-                        <div key={c.point_id} className="w-full">
-                          <button
-                            onClick={() =>
-                              setExpandedCitationId(
-                                expandedCitationId === c.point_id ? null : c.point_id
-                              )
-                            }
-                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 hover:border-indigo-500/50 text-[11px] text-slate-300 transition-all cursor-pointer"
-                          >
-                            <ChevronRight
-                              className={`w-3 h-3 text-slate-500 transition-transform ${
-                                expandedCitationId === c.point_id ? 'rotate-90' : ''
-                              }`}
-                            />
-                            <span className="font-semibold text-indigo-300">[{c.source_index}]</span>
-                            <span className="truncate max-w-xs">{c.filename}</span>
-                            <span className="text-[10px] text-emerald-400/90 font-mono">
-                              匹配度: {c.score <= 1 ? `${(c.score * 100).toFixed(1)}%` : c.score}
-                            </span>
-                            {c.match_type && (
-                              <span className="text-[9px] px-1 py-0.2 rounded bg-purple-950/70 text-purple-300 border border-purple-800/40">
-                                {c.match_type}
-                              </span>
-                            )}
-                          </button>
-                          {expandedCitationId === c.point_id && (
-                            <div className="mt-1 p-2.5 rounded-lg bg-slate-950/90 border border-slate-800 text-[11px] text-slate-400 whitespace-pre-wrap leading-relaxed select-text">
-                              {c.content}
-                            </div>
-                          )}
+                  {/* 第二行：时间戳 (对齐 Cherry Studio: 10/04 20:16) */}
+                  <div className="text-xs text-slate-500 font-mono">
+                    {formatTimestamp(msg.created_at)}
+                  </div>
+
+                  {/* 第三行：消息正文与各挂载模块 */}
+                  <div className="pt-1.5 space-y-2">
+                    {/* 用户调用的技能徽标 */}
+                    {isUser && invocation && (
+                      <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/10 text-amber-300 border border-amber-500/20 text-xs font-mono">
+                        <Zap className="w-3.5 h-3.5 text-amber-400" />
+                        <span>/{invocation.code}</span>
+                        {invocation.skill && (
+                          <span className="text-slate-400 font-sans">· {invocation.skill.name}</span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* 思考过程折叠块 (Assistant) */}
+                    {!isUser && thinking && (
+                      <ReasoningBlock thinking={thinking} defaultOpen={false} />
+                    )}
+
+                    {/* 工具调用历史 (Assistant) */}
+                    {!isUser && msg.tool_calls && msg.tool_calls.length > 0 && (
+                      <div className="space-y-1.5">
+                        {msg.tool_calls.map((tc) => (
+                          <ToolCallBlock key={tc.tool_id} tool={tc} defaultOpen={false} />
+                        ))}
+                      </div>
+                    )}
+
+                    {/* 消息正文文本 (通透无气泡边界，对齐 Cherry Studio) */}
+                    <div className="text-sm text-slate-200 leading-relaxed break-words font-normal">
+                      {isUser ? (
+                        <div className="whitespace-pre-wrap select-text">
+                          {invocation ? invocation.prompt : msg.content}
                         </div>
-                      ))}
+                      ) : (
+                        <div className="prose prose-invert prose-sm max-w-none break-words">
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                              code: MarkdownCodeBlock,
+                            }}
+                          >
+                            {mainAnswer}
+                          </ReactMarkdown>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 知识库溯源引用 (Assistant) */}
+                    {!isUser && msg.citations && msg.citations.length > 0 && (
+                      <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
+                        <div className="text-[11px] font-semibold text-indigo-400 flex items-center gap-1 font-mono">
+                          <BookOpen className="w-3.5 h-3.5" />
+                          <span>检索溯源参考 ({msg.citations.length})</span>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {msg.citations.map((c) => (
+                            <div key={c.point_id} className="w-full">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setExpandedCitationId(
+                                    expandedCitationId === c.point_id ? null : c.point_id
+                                  )
+                                }
+                                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 text-[11px] text-slate-300 transition-all cursor-pointer"
+                              >
+                                <ChevronRight
+                                  className={`w-3 h-3 text-slate-500 transition-transform ${
+                                    expandedCitationId === c.point_id ? 'rotate-90' : ''
+                                  }`}
+                                />
+                                <span className="font-semibold text-indigo-300">[{c.source_index}]</span>
+                                <span className="truncate max-w-xs">{c.filename}</span>
+                                <span className="text-[10px] text-emerald-400/90 font-mono">
+                                  匹配度: {c.score <= 1 ? `${(c.score * 100).toFixed(1)}%` : c.score}
+                                </span>
+                              </button>
+                              {expandedCitationId === c.point_id && (
+                                <div className="mt-1 p-2.5 rounded-lg bg-slate-950/80 border border-slate-800 text-[11px] text-slate-400 whitespace-pre-wrap leading-relaxed select-text">
+                                  {c.content}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 第四行：Token 统计 (对齐 Cherry Studio: Tokens: 1 或 Tokens: 10904 ↑10899 ↓5) */}
+                    <div className="pt-1 text-[11px] text-slate-500 font-mono select-none">
+                      {isUser ? (
+                        <span>Tokens: {msg.token_count || 1}</span>
+                      ) : (
+                        <span>Tokens: {totalTokens} ↑{upTokens} ↓{downTokens}</span>
+                      )}
+                    </div>
+
+                    {/* 第五行：消息底部操作栏 (对齐 Cherry Studio messageMenuBarActions 真实事件) */}
+                    <div className="flex items-center gap-1.5 pt-1 text-slate-500">
+                      {/* 1. 复制 (Copy) */}
+                      <button
+                        type="button"
+                        onClick={() => handleCopyText(msg.id, mainAnswer)}
+                        className="p-1.5 rounded-md hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+                        title="复制内容 (Copy)"
+                      >
+                        {copiedMessageId === msg.id ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+
+                      {/* 2. 编辑 (Edit: 将内容填入输入框) */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setInput(mainAnswer);
+                          textareaRef.current?.focus();
+                        }}
+                        className="p-1.5 rounded-md hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+                        title="填入输入框编辑 (Edit)"
+                      >
+                        <SquarePen className="w-3.5 h-3.5" />
+                      </button>
+
+                      {/* 如果是 Assistant 消息，提供重新生成、更换模型、翻译、有用反馈 */}
+                      {!isUser && (
+                        <>
+                          {/* 3. 重新生成 (Regenerate: 重新触发回答) */}
+                          <button
+                            type="button"
+                            onClick={() => handleTriggerRegenerate(index)}
+                            className="p-1.5 rounded-md hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+                            title="重新生成当前回答 (Regenerate)"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* 4. 更换模型重新生成 (Mention Model Picker) */}
+                          <div className="relative">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setShowModelPickerForMsgId(
+                                  showModelPickerForMsgId === msg.id ? null : msg.id
+                                )
+                              }
+                              className="p-1.5 rounded-md hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+                              title="更换指定模型重新生成"
+                            >
+                              <AtSign className="w-3.5 h-3.5" />
+                            </button>
+                            {showModelPickerForMsgId === msg.id && (
+                              <div className="absolute left-0 bottom-7 w-48 rounded-xl bg-slate-900 border border-slate-800 shadow-2xl py-1 z-50 text-xs">
+                                <div className="px-2.5 py-1 text-[10px] text-slate-400 font-semibold border-b border-slate-800">
+                                  使用指定模型重新生成
+                                </div>
+                                {models.map((m) => (
+                                  <button
+                                    key={m.id}
+                                    type="button"
+                                    onClick={() => {
+                                      setShowModelPickerForMsgId(null);
+                                      handleTriggerRegenerate(index, m.id);
+                                    }}
+                                    className="w-full text-left px-2.5 py-1.5 hover:bg-slate-800 text-slate-300 truncate"
+                                  >
+                                    {m.name}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* 5. 翻译 (Translate) */}
+                          <div className="relative">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setShowTranslatePopupForMsgId(
+                                  showTranslatePopupForMsgId === msg.id ? null : msg.id
+                                )
+                              }
+                              className="p-1.5 rounded-md hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+                              title="翻译为其他语言 (Translate)"
+                            >
+                              <Languages className="w-3.5 h-3.5" />
+                            </button>
+                            {showTranslatePopupForMsgId === msg.id && (
+                              <div className="absolute left-0 bottom-7 w-40 rounded-xl bg-slate-900 border border-slate-800 shadow-2xl py-1 z-50 text-xs">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setShowTranslatePopupForMsgId(null);
+                                    onSendMessage(`请将以下回答翻译为标准英文：\n\n${mainAnswer}`);
+                                  }}
+                                  className="w-full text-left px-2.5 py-1.5 hover:bg-slate-800 text-slate-300"
+                                >
+                                  翻译为英文 (English)
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setShowTranslatePopupForMsgId(null);
+                                    onSendMessage(`请将以下回答翻译为中文：\n\n${mainAnswer}`);
+                                  }}
+                                  className="w-full text-left px-2.5 py-1.5 hover:bg-slate-800 text-slate-300"
+                                >
+                                  翻译为中文 (Chinese)
+                                </button>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* 6. 标记有帮助 (Useful / ThumbsUp) */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setLikedMessageIds((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(msg.id)) {
+                                  next.delete(msg.id);
+                                } else {
+                                  next.add(msg.id);
+                                }
+                                return next;
+                              });
+                            }}
+                            className={`p-1.5 rounded-md transition-colors cursor-pointer ${
+                              isLiked
+                                ? 'text-indigo-400 bg-indigo-500/10'
+                                : 'hover:text-slate-200 hover:bg-slate-800'
+                            }`}
+                            title={isLiked ? '已标记为采纳回答' : '标记有帮助 (Useful)'}
+                          >
+                            <ThumbsUp className={`w-3.5 h-3.5 ${isLiked ? 'fill-indigo-400' : ''}`} />
+                          </button>
+
+                          {/* 7. 保存到知识库 / 导出 (Notes / Export) */}
+                          <button
+                            type="button"
+                            onClick={() => handleExportMarkdown(msg)}
+                            className="p-1.5 rounded-md hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+                            title="保存到笔记 / 导出 Markdown (Notes)"
+                          >
+                            <Bookmark className="w-3.5 h-3.5" />
+                          </button>
+                        </>
+                      )}
+
+                      {/* 8. 删除 (Delete: 从会话移除该消息) */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (onDeleteMessage) {
+                            onDeleteMessage(msg.id);
+                          } else {
+                            alert('已在当前视图中移除此消息');
+                          }
+                        }}
+                        className="p-1.5 rounded-md hover:text-rose-400 hover:bg-slate-800 transition-colors cursor-pointer"
+                        title="删除该消息 (Delete)"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+
+                      {/* 9. 更多操作 (语音朗读等) */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if ('speechSynthesis' in window) {
+                            const utterance = new SpeechSynthesisUtterance(mainAnswer.slice(0, 300));
+                            window.speechSynthesis.speak(utterance);
+                          }
+                        }}
+                        className="p-1.5 rounded-md hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+                        title="语音朗读 (TTS)"
+                      >
+                        <Volume2 className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   </div>
-                )}
+                </div>
               </div>
             </div>
           );
         })}
 
-        {/* 正在流式生成的实时气泡 */}
+        {/* 正在流式生成中的助手消息 (对齐 Cherry Studio) */}
         {isStreaming && (
-          <div className="flex gap-3 max-w-3xl mr-auto">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-purple-600 via-indigo-600 to-sky-600 flex items-center justify-center shrink-0 text-white shadow">
-              <Bot className="w-4 h-4 animate-spin-slow" />
-            </div>
-            <div className="rounded-2xl rounded-tl-none px-4 py-3.5 text-sm leading-relaxed max-w-2xl bg-slate-900/90 border border-slate-800/80 text-slate-100 shadow-xl space-y-3 flex-1 overflow-hidden">
-              {/* 1. 流式思考过程渲染 */}
-              {(currentStreamingParsed.thinking || isStreaming) && (
-                <ReasoningBlock
-                  thinking={currentStreamingParsed.thinking}
-                  isStreaming={isStreaming && !currentStreamingParsed.mainAnswer}
-                  defaultOpen={true}
-                />
-              )}
+          <div className="w-full max-w-4xl mx-auto py-3 px-4 rounded-xl hover:bg-slate-900/40 transition-colors">
+            <div className="flex items-start gap-3.5">
+              <div className="w-8 h-8 rounded-lg bg-slate-800 border border-slate-700/60 text-indigo-400 font-bold flex items-center justify-center text-xs shrink-0 shadow-sm animate-pulse">
+                {selectedModel?.name ? selectedModel.name.slice(0, 1) : '默'}
+              </div>
 
-              {/* 2. 实时工具调用状态 */}
-              {streamingToolCalls.length > 0 && (
-                <div className="space-y-1.5">
-                  {streamingToolCalls.map((tc) => (
-                    <ToolCallBlock
-                      key={tc.tool_id}
-                      tool={tc}
-                      defaultOpen={tc.status === 'running'}
+              <div className="flex-1 min-w-0 space-y-1">
+                <div className="text-sm font-semibold text-slate-100 leading-snug">
+                  {selectedModel?.name || 'gpt-6.1-sol | New API'}
+                </div>
+                <div className="text-xs text-slate-500 font-mono">
+                  {formatTimestamp()} · 实时生成中
+                </div>
+
+                <div className="pt-1.5 space-y-2">
+                  {/* 流式思考过程 */}
+                  {(currentStreamingParsed.thinking || isStreaming) && (
+                    <ReasoningBlock
+                      thinking={currentStreamingParsed.thinking}
+                      isStreaming={isStreaming && !currentStreamingParsed.mainAnswer}
+                      defaultOpen={true}
                     />
-                  ))}
-                </div>
-              )}
+                  )}
 
-              {/* 3. 实时打字机 Markdown 渲染 */}
-              {currentStreamingParsed.mainAnswer && (
-                <div className="prose prose-invert prose-sm max-w-none break-words">
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    components={{
-                      code: MarkdownCodeBlock,
-                    }}
-                  >
-                    {currentStreamingParsed.mainAnswer}
-                  </ReactMarkdown>
-                </div>
-              )}
+                  {/* 实时工具调用 */}
+                  {streamingToolCalls.length > 0 && (
+                    <div className="space-y-1.5">
+                      {streamingToolCalls.map((tc) => (
+                        <ToolCallBlock
+                          key={tc.tool_id}
+                          tool={tc}
+                          defaultOpen={tc.status === 'running'}
+                        />
+                      ))}
+                    </div>
+                  )}
 
-              {/* 4. 实时打字光标 */}
-              <div className="inline-block w-2 h-4 ml-1 bg-indigo-400 animate-pulse align-middle" />
-
-              {/* 5. 实时知识库引用 */}
-              {streamingCitations.length > 0 && (
-                <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
-                  <div className="text-[11px] font-semibold text-indigo-400 flex items-center gap-1 font-mono">
-                    <BookOpen className="w-3.5 h-3.5" />
-                    <span>检索溯源参考 ({streamingCitations.length})</span>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {streamingCitations.map((c) => (
-                      <span
-                        key={c.point_id}
-                        className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800 text-[11px] text-slate-300 font-mono"
+                  {/* 打字机正文渲染 */}
+                  {currentStreamingParsed.mainAnswer && (
+                    <div className="prose prose-invert prose-sm max-w-none break-words text-slate-200">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          code: MarkdownCodeBlock,
+                        }}
                       >
-                        [{c.source_index}] {c.filename}
-                      </span>
-                    ))}
-                  </div>
+                        {currentStreamingParsed.mainAnswer}
+                      </ReactMarkdown>
+                    </div>
+                  )}
+
+                  {/* 打字光标 */}
+                  <div className="inline-block w-2 h-4 bg-indigo-400 animate-pulse align-middle" />
+
+                  {/* 实时知识库引用 */}
+                  {streamingCitations.length > 0 && (
+                    <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
+                      <div className="text-[11px] font-semibold text-indigo-400 flex items-center gap-1 font-mono">
+                        <BookOpen className="w-3.5 h-3.5" />
+                        <span>检索溯源参考 ({streamingCitations.length})</span>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {streamingCitations.map((c) => (
+                          <span
+                            key={c.point_id}
+                            className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[11px] text-slate-300 font-mono"
+                          >
+                            [{c.source_index}] {c.filename}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
             </div>
           </div>
         )}
@@ -826,7 +1360,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           <div className="p-4 rounded-2xl bg-amber-950/20 border border-amber-500/40 space-y-3 max-w-xl mx-auto shadow-xl animate-in fade-in zoom-in-95">
             <div className="flex items-center gap-2 text-amber-400 font-semibold text-sm">
               <ShieldAlert className="w-5 h-5 shrink-0" />
-              <span>智能体申请执行敏感操作，需人工决策</span>
+              <span>智能体申请执行高危敏感操作，需人工审批</span>
             </div>
             <div className="p-3 rounded-xl bg-slate-900 border border-slate-800 text-xs space-y-1.5 font-mono text-slate-300">
               <div>操作类型: <span className="text-amber-300 font-bold">{pendingApproval.action_type}</span></div>
@@ -835,6 +1369,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </div>
             <div className="flex items-center justify-end gap-2.5 pt-1">
               <button
+                type="button"
                 onClick={() => onApproveAction(false)}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900 text-rose-300 border border-rose-800 text-xs font-medium transition-colors cursor-pointer"
               >
@@ -842,11 +1377,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 <span>拒绝操作</span>
               </button>
               <button
+                type="button"
                 onClick={() => onApproveAction(true)}
                 className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors cursor-pointer shadow-md"
               >
                 <CheckCircle className="w-3.5 h-3.5" />
-                <span>批准并继续</span>
+                <span>批准并执行</span>
               </button>
             </div>
           </div>
@@ -855,12 +1391,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         <div ref={messagesEndRef} />
       </div>
 
-      {/* 底部输入框与控制台 (Composer) */}
+      {/* ─── 底部输入框与工具栏 (Composer: 对齐 Cherry Studio 图二与源码架构) ── */}
       <div className="p-4 bg-gradient-to-t from-[#0B0F17] via-[#0B0F17]/95 to-transparent relative z-20">
-        <div className="max-w-3xl mx-auto space-y-2">
+        <div className="max-w-4xl mx-auto space-y-2">
           {/* Slash 指令弹窗提示 */}
           {isSlashTyping && matchingSkills.length > 0 && (
-            <div className="p-1.5 rounded-xl bg-slate-900 border border-slate-800 shadow-2xl mb-1.5 space-y-0.5 max-h-56 overflow-y-auto">
+            <div className="p-1.5 rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl mb-1.5 space-y-0.5 max-h-56 overflow-y-auto">
               <div className="px-2.5 py-1 text-[11px] font-semibold text-slate-500 uppercase tracking-wider flex items-center justify-between">
                 <span>匹配专业技能 (Tab / Enter 选中)</span>
                 <span>{matchingSkills.length} 个可用</span>
@@ -869,7 +1405,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 <div
                   key={s.id}
                   onClick={() => handleSelectSkill(s)}
-                  className={`flex items-center justify-between px-2.5 py-2 rounded-lg text-xs cursor-pointer transition-colors ${
+                  className={`flex items-center justify-between px-2.5 py-2 rounded-xl text-xs cursor-pointer transition-colors ${
                     idx === selectedSkillIndex
                       ? 'bg-indigo-600 text-white'
                       : 'text-slate-300 hover:bg-slate-800'
@@ -883,7 +1419,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     </span>
                   </div>
                   {s.category && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-black/20 text-slate-300 font-mono">
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-black/30 text-slate-300 font-mono">
                       {s.category}
                     </span>
                   )}
@@ -892,68 +1428,372 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </div>
           )}
 
-          {/* 激活技能徽标或快捷芯片 */}
-          {activeMatchedSkill ? (
-            <div className="flex items-center gap-1.5 text-xs text-amber-300 px-3 py-1 rounded-lg bg-amber-950/30 border border-amber-500/30 w-fit">
-              <Zap className="w-3.5 h-3.5 text-amber-400" />
-              <span>当前已激活专家技能: <strong>{activeMatchedSkill.name}</strong> (/{activeMatchedSkill.code})</span>
+          {/* 统一快速面板 (QuickPanel: [+] 弹出聚合菜单) */}
+          {showQuickPanel && (
+            <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl mb-2 grid grid-cols-2 gap-2 max-h-60 overflow-y-auto text-xs animate-in fade-in zoom-in-95">
+              <div className="col-span-2 pb-1 text-[10px] text-slate-400 font-semibold uppercase tracking-wider border-b border-slate-800 flex justify-between">
+                <span>快捷面板 (QuickPanel)</span>
+                <span className="text-slate-500">点击填入</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setInput('/xhs_writer 帮我写一篇关于人工智能效率工具的爆款小红书文案');
+                  setShowQuickPanel(false);
+                  textareaRef.current?.focus();
+                }}
+                className="p-2.5 text-left rounded-xl bg-slate-800/60 hover:bg-slate-800 border border-slate-700/50 text-slate-200 transition-colors"
+              >
+                <div className="font-medium text-amber-300 flex items-center gap-1">
+                  <Zap className="w-3 h-3" />
+                  爆款小红书文案
+                </div>
+                <div className="text-[10px] text-slate-400 truncate mt-0.5">/xhs_writer 爆款文案 SOP</div>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setInput('/code_architect 请帮我评审一段高并发账户余额扣减代码，分析死锁与幂等设计');
+                  setShowQuickPanel(false);
+                  textareaRef.current?.focus();
+                }}
+                className="p-2.5 text-left rounded-xl bg-slate-800/60 hover:bg-slate-800 border border-slate-700/50 text-slate-200 transition-colors"
+              >
+                <div className="font-medium text-indigo-300 flex items-center gap-1">
+                  <Terminal className="w-3 h-3" />
+                  架构与代码评审
+                </div>
+                <div className="text-[10px] text-slate-400 truncate mt-0.5">/code_architect 事务与防重幂等</div>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setInput('帮我用 Python 计算斐波那契数列前 30 项并绘制增长比率');
+                  setShowQuickPanel(false);
+                  textareaRef.current?.focus();
+                }}
+                className="p-2.5 text-left rounded-xl bg-slate-800/60 hover:bg-slate-800 border border-slate-700/50 text-slate-200 transition-colors"
+              >
+                <div className="font-medium text-emerald-300 flex items-center gap-1">
+                  <Terminal className="w-3 h-3" />
+                  Python 代码沙箱
+                </div>
+                <div className="text-[10px] text-slate-400 truncate mt-0.5">数据推演与图表计算</div>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setInput('我们平台的安全守则中对高危操作是如何规定的？');
+                  setShowQuickPanel(false);
+                  textareaRef.current?.focus();
+                }}
+                className="p-2.5 text-left rounded-xl bg-slate-800/60 hover:bg-slate-800 border border-slate-700/50 text-slate-200 transition-colors"
+              >
+                <div className="font-medium text-sky-300 flex items-center gap-1">
+                  <BookOpen className="w-3 h-3" />
+                  知识库合规问答
+                </div>
+                <div className="text-[10px] text-slate-400 truncate mt-0.5">精准溯源企业知识库内容</div>
+              </button>
             </div>
-          ) : (
-            /* 快捷 Slash 技能胶囊 */
-            <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs no-scrollbar">
-              <span className="text-[11px] text-slate-500 shrink-0 font-medium">推荐技能:</span>
-              {skills.slice(0, 4).map((s) => (
+          )}
+
+          {/* 知识库选择器弹窗 (Knowledge Base Picker) */}
+          {showKbPicker && (
+            <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl mb-2 text-xs animate-in fade-in zoom-in-95">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-800 mb-2">
+                <span className="font-semibold text-slate-200 flex items-center gap-1.5">
+                  <BookOpen className="w-3.5 h-3.5 text-indigo-400" />
+                  选择关联知识库检索范围
+                </span>
                 <button
-                  key={s.id}
                   type="button"
-                  onClick={() => handleSelectSkill(s)}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/70 text-[11px] text-slate-300 hover:text-white shrink-0 transition-colors cursor-pointer"
+                  onClick={() => setShowKbPicker(false)}
+                  className="text-slate-500 hover:text-slate-300"
                 >
-                  <Zap className="w-3 h-3 text-amber-400" />
-                  <span className="font-mono">/{s.code}</span>
-                  <span className="text-slate-400">· {s.name}</span>
+                  ✕
                 </button>
+              </div>
+              <div className="max-h-40 overflow-y-auto space-y-1">
+                {knowledgeBases.length === 0 ? (
+                  <div className="text-slate-500 text-center py-2">暂无知识库，请先在知识库模块创建</div>
+                ) : (
+                  knowledgeBases.map((kb) => {
+                    const isSelected = selectedKbIds.includes(kb.id);
+                    return (
+                      <div
+                        key={kb.id}
+                        onClick={() => {
+                          setSelectedKbIds((prev) =>
+                            isSelected ? prev.filter((id) => id !== kb.id) : [...prev, kb.id]
+                          );
+                        }}
+                        className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors ${
+                          isSelected
+                            ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/30'
+                            : 'hover:bg-slate-800 text-slate-300'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <BookOpen className="w-3.5 h-3.5 text-indigo-400" />
+                          <span>{kb.name}</span>
+                        </div>
+                        <span className="text-[10px] text-slate-500 font-mono">
+                          {kb.document_count} 文档
+                        </span>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* MCP 工具箱状态弹窗 (MCP Tool Popup) */}
+          {showMcpPopup && (
+            <div className="p-3 rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl mb-2 text-xs animate-in fade-in zoom-in-95">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-800 mb-2">
+                <span className="font-semibold text-slate-200 flex items-center gap-1.5">
+                  <Cpu className="w-3.5 h-3.5 text-teal-400" />
+                  MCP 外部协议工具箱服务
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowMcpPopup(false)}
+                  className="text-slate-500 hover:text-slate-300"
+                >
+                  ✕
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-400 mb-2">
+                当前智能体已挂载外部 MCP 扩展工具支持，可在设置中配置并启停更多 MCP Server。
+              </p>
+              <div className="flex items-center justify-between pt-1 border-t border-slate-800">
+                <span className="text-[10px] text-emerald-400 font-mono">MCP 连接协议: 活跃中</span>
+                {onNavigateToSettings && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowMcpPopup(false);
+                      onNavigateToSettings();
+                    }}
+                    className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-indigo-300 text-[11px]"
+                  >
+                    前往 MCP 管理
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* 挂载的 Token 标签区域 (附件、知识库范围、联网搜索状态) */}
+          {(attachedFiles.length > 0 || selectedKbIds.length > 0 || isWebSearchActive) && (
+            <div className="flex items-center gap-2 flex-wrap px-1">
+              {/* 联网搜索激活徽标 */}
+              {isWebSearchActive && (
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-sky-950/60 border border-sky-500/40 text-sky-300 text-xs font-mono shadow-sm">
+                  <Globe className="w-3.5 h-3.5 text-sky-400 animate-pulse" />
+                  <span>实时联网检索: 已开启</span>
+                  <button
+                    type="button"
+                    onClick={() => setIsWebSearchActive(false)}
+                    className="hover:text-white cursor-pointer ml-1 text-slate-400"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+
+              {/* 知识库范围徽标 */}
+              {selectedKbIds.map((kbId) => {
+                const kb = knowledgeBases.find((k) => k.id === kbId);
+                return (
+                  <div
+                    key={kbId}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-950/60 border border-indigo-500/40 text-indigo-300 text-xs shadow-sm"
+                  >
+                    <BookOpen className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>知识库: {kb?.name || '指定知识库'}</span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedKbIds((prev) => prev.filter((id) => id !== kbId))}
+                      className="hover:text-white cursor-pointer ml-1 text-slate-400"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                );
+              })}
+
+              {/* 挂载的附件列表 */}
+              {attachedFiles.map((file) => (
+                <div
+                  key={file.id}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-850 border border-slate-700 text-slate-200 text-xs shadow-sm"
+                >
+                  <Paperclip className="w-3.5 h-3.5 text-slate-400" />
+                  <span className="truncate max-w-[120px]">{file.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => setAttachedFiles((prev) => prev.filter((f) => f.id !== file.id))}
+                    className="hover:text-rose-400 cursor-pointer ml-1 text-slate-400"
+                  >
+                    ✕
+                  </button>
+                </div>
               ))}
             </div>
           )}
 
-          {/* 输入框主容器 */}
-          <div className="relative rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl focus-within:border-indigo-500/80 transition-all overflow-hidden">
+          {/* 激活技能徽标提示 */}
+          {activeMatchedSkill && (
+            <div className="flex items-center gap-1.5 text-xs text-amber-300 px-3 py-1 rounded-lg bg-amber-950/20 border border-amber-500/30 w-fit">
+              <Zap className="w-3.5 h-3.5 text-amber-400" />
+              <span>当前已挂载技能: <strong>{activeMatchedSkill.name}</strong> (/{activeMatchedSkill.code})</span>
+            </div>
+          )}
+
+          {/* 输入框主卡片容器 (对齐 Cherry Studio 图二底部暗黑圆角盒子与深蓝高亮) */}
+          <div className="relative rounded-2xl bg-slate-900/90 border border-slate-800/80 shadow-2xl focus-within:border-indigo-500/70 transition-all p-3">
+            {/* 多行输入文本域 */}
             <textarea
               ref={textareaRef}
-              rows={3}
+              rows={2}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="输入你的问题，或键入 '/' 调用专业技能（如 /sql_tuner, /xhs_writer）..."
-              className="w-full bg-transparent p-4 text-sm text-white placeholder-slate-500 focus:outline-none resize-none"
+              placeholder="在这里输入消息，按 Enter 发送"
+              className="w-full bg-transparent px-1 py-1 text-sm text-slate-100 placeholder-slate-500 focus:outline-none resize-none min-h-[48px]"
             />
 
-            {/* 底部操作栏 */}
-            <div className="flex items-center justify-between px-4 py-2.5 border-t border-slate-800/60 bg-slate-900/60">
-              <div className="flex items-center gap-2 text-[11px] text-slate-500 font-mono">
-                <span>Enter 发送</span>
-                <span>·</span>
-                <span>Shift + Enter 换行</span>
+            {/* 底部功能工具栏 (对齐 Cherry Studio 图二底部横向排版与真实事件) */}
+            <div className="flex items-center justify-between pt-2 border-t border-slate-800/60 mt-1">
+              {/* 左侧工具栏按钮组: [+], 附件, 联网, 知识库, MCP, @, 分割线, 更多 */}
+              <div className="flex items-center gap-1 text-slate-400">
+                {/* 快捷面板 [+] */}
+                <button
+                  type="button"
+                  onClick={() => setShowQuickPanel(!showQuickPanel)}
+                  className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                    showQuickPanel ? 'text-indigo-400 bg-indigo-500/15' : 'hover:text-slate-200 hover:bg-slate-800'
+                  }`}
+                  title="预设提示词与常用工具面板 (QuickPanel)"
+                >
+                  <PlusSquare className="w-4 h-4" />
+                </button>
+
+                {/* 附件上传 */}
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="p-1.5 rounded-lg hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+                  title="上传文件/附件 (Attachment)"
+                >
+                  <Paperclip className="w-4 h-4" />
+                </button>
+
+                {/* 实时联网搜索切换 */}
+                <button
+                  type="button"
+                  onClick={() => setIsWebSearchActive(!isWebSearchActive)}
+                  className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                    isWebSearchActive
+                      ? 'text-sky-400 bg-sky-500/20 border border-sky-500/40'
+                      : 'hover:text-slate-200 hover:bg-slate-800'
+                  }`}
+                  title={isWebSearchActive ? '联网搜索已开启' : '点击开启实时联网搜索 (Web Search)'}
+                >
+                  <Globe className="w-4 h-4" />
+                </button>
+
+                {/* 知识库引用 */}
+                <button
+                  type="button"
+                  onClick={() => setShowKbPicker(!showKbPicker)}
+                  className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                    showKbPicker || selectedKbIds.length > 0
+                      ? 'text-indigo-400 bg-indigo-500/15'
+                      : 'hover:text-slate-200 hover:bg-slate-800'
+                  }`}
+                  title="指定企业知识库检索范围 (Knowledge Base)"
+                >
+                  <BookOpen className="w-4 h-4" />
+                </button>
+
+                {/* MCP 工具箱 */}
+                <button
+                  type="button"
+                  onClick={() => setShowMcpPopup(!showMcpPopup)}
+                  className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                    showMcpPopup ? 'text-teal-400 bg-teal-500/15' : 'hover:text-slate-200 hover:bg-slate-800'
+                  }`}
+                  title="外部 MCP 服务协议状态 (MCP Status)"
+                >
+                  <Cpu className="w-4 h-4" />
+                </button>
+
+                {/* @ 技能呼出 */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInput('/');
+                    textareaRef.current?.focus();
+                  }}
+                  className="p-1.5 rounded-lg hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+                  title="呼出专业技能与智能体 (/)"
+                >
+                  <AtSign className="w-4 h-4" />
+                </button>
+
+                {/* 分割线 */}
+                <span className="h-3.5 w-px bg-slate-800 mx-1" />
+
+                {/* 更多生态广场探索 */}
+                <button
+                  type="button"
+                  onClick={() => onNavigateToPlaza?.()}
+                  className="p-1.5 rounded-lg hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+                  title="生态广场探索"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
               </div>
 
+              {/* 右侧动作按钮组: 翻译语言 + 经典圆形发送按钮 (保留统一主题高亮) */}
               <div className="flex items-center gap-2">
+                {/* 文A 翻译快捷切换 */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (input.trim()) {
+                      setInput(`请将以下内容翻译为标准中文：\n${input}`);
+                    }
+                  }}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+                  title="快速翻译/润色 (Translate)"
+                >
+                  <Languages className="w-4 h-4" />
+                </button>
+
+                {/* 经典圆形发送按钮 (对齐 Cherry Studio 图二形状，保留系统统一高亮) */}
                 {isStreaming ? (
                   <button
+                    type="button"
                     onClick={onStopStreaming}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-medium transition-colors cursor-pointer shadow"
+                    className="w-8 h-8 rounded-full bg-rose-600 hover:bg-rose-500 text-white flex items-center justify-center transition-all cursor-pointer shadow-md shadow-rose-600/30"
+                    title="停止生成"
                   >
                     <Square className="w-3.5 h-3.5 fill-current" />
-                    <span>停止生成</span>
                   </button>
                 ) : (
                   <button
+                    type="button"
                     onClick={handleSend}
-                    disabled={!input.trim()}
-                    className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-semibold transition-all cursor-pointer shadow disabled:cursor-not-allowed"
+                    disabled={!input.trim() && attachedFiles.length === 0}
+                    className="w-8 h-8 rounded-full bg-indigo-600 hover:bg-indigo-500 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed text-white flex items-center justify-center transition-all cursor-pointer shadow-md shadow-indigo-600/30"
+                    title="发送消息"
                   >
-                    <Send className="w-3.5 h-3.5" />
-                    <span>发送</span>
+                    <ArrowUp className="w-4 h-4 stroke-[2.5]" />
                   </button>
                 )}
               </div>

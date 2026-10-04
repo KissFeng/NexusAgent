@@ -14,6 +14,7 @@ import {
   Terminal,
   FileText,
   Bot,
+  Plus,
 } from 'lucide-react';
 import type { ToolConfig, Skill } from '../../types';
 import { api } from '../../api/client';
@@ -26,6 +27,7 @@ interface PlazaViewProps {
   installedSkills: Skill[];
   onRefreshTools: () => void;
   onRefreshSkills: () => void;
+  onNavigateToSettings?: (tab: 'mcp' | 'skill') => void;
 }
 
 // 预置 MCP 广场服务元数据
@@ -287,6 +289,7 @@ export const PlazaView: React.FC<PlazaViewProps> = ({
   installedSkills,
   onRefreshTools,
   onRefreshSkills,
+  onNavigateToSettings,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'mcp' | 'skill'>(
@@ -471,6 +474,21 @@ export const PlazaView: React.FC<PlazaViewProps> = ({
               <span>Skill 广场 ({SKILL_MARKET_ITEMS.length})</span>
             </button>
           </div>
+
+          {/* 快捷添加自定义入口 */}
+          {onNavigateToSettings && (
+            <button
+              onClick={() => onNavigateToSettings(activeTab)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold shadow-sm transition-all cursor-pointer ${
+                activeTab === 'mcp'
+                  ? 'bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/40'
+                  : 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40'
+              }`}
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>{activeTab === 'mcp' ? '自定义接入 MCP' : '创建自定义技能'}</span>
+            </button>
+          )}
         </div>
       </header>
 
@@ -562,9 +580,20 @@ export const PlazaView: React.FC<PlazaViewProps> = ({
                       </div>
 
                       {installed ? (
-                        <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-medium px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
-                          <CheckCircle className="w-3.5 h-3.5" />
-                          <span>已装上</span>
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-medium px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+                            <CheckCircle className="w-3.5 h-3.5" />
+                            <span>已装载</span>
+                          </div>
+                          {onNavigateToSettings && (
+                            <button
+                              onClick={() => onNavigateToSettings('mcp')}
+                              className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition-colors cursor-pointer"
+                              title="在设置中配置参数与测试连接"
+                            >
+                              配置
+                            </button>
+                          )}
                         </div>
                       ) : (
                         <button
@@ -660,9 +689,20 @@ export const PlazaView: React.FC<PlazaViewProps> = ({
                       </span>
 
                       {installed ? (
-                        <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-medium px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
-                          <CheckCircle className="w-3.5 h-3.5" />
-                          <span>已装上</span>
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-medium px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+                            <CheckCircle className="w-3.5 h-3.5" />
+                            <span>已装载</span>
+                          </div>
+                          {onNavigateToSettings && (
+                            <button
+                              onClick={() => onNavigateToSettings('skill')}
+                              className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition-colors cursor-pointer"
+                              title="在设置中二次编辑 Prompt 与绑定"
+                            >
+                              二次编辑
+                            </button>
+                          )}
                         </div>
                       ) : (
                         <button

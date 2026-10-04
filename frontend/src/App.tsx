@@ -72,6 +72,35 @@ export default function App() {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [tools, setTools] = useState<ToolConfig[]>([]);
   const [memories, setMemories] = useState<Memory[]>([]);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  const handleDeleteMessage = (messageId: string) => {
+    if (!activeConversationId) return;
+    setMessagesByConv((prev) => ({
+      ...prev,
+      [activeConversationId]: (prev[activeConversationId] || []).filter((m) => m.id !== messageId),
+    }));
+  };
+
+  const handleForkConversation = (convId: string) => {
+    const origConv = conversations.find((c) => c.id === convId);
+    const draftId = `draft-fork-${Date.now()}`;
+    const newDraft: Conversation = {
+      id: draftId,
+      workspace_id: currentWorkspace?.id || '',
+      user_id: user?.id || '',
+      model_config_id: selectedModelId || undefined,
+      title: `${origConv?.title || '新对话'} (分支)`,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    setConversations((prev) => [newDraft, ...prev]);
+    setActiveConversationId(draftId);
+    setMessagesByConv((prev) => ({
+      ...prev,
+      [draftId]: [...(prev[convId] || [])],
+    }));
+  };
 
   // 1. Initial auth check
   useEffect(() => {
@@ -571,46 +600,49 @@ export default function App() {
       />
 
       {/* 2. 二级侧边栏 Pane (宽 250px) */}
-      <SubSidebar
-        activeMainTab={activeMainTab}
-        currentWorkspace={currentWorkspace}
-        // Chat 相关
-        conversations={conversations}
-        activeConversationId={activeConversationId}
-        onSelectConversation={(id) => {
-          setActiveConversationId(id);
-          setActiveMainTab('chat');
-        }}
-        onNewConversation={handleNewConversation}
-        onDeleteConversation={handleDeleteConversation}
-        streamingConversationIds={Object.keys(streamingSessions).filter(
-          (id) => streamingSessions[id]?.isStreaming
-        )}
-        // Plaza 相关
-        plazaCategory={plazaCategory}
-        onSelectPlazaCategory={setPlazaCategory}
-        plazaTagFilter={plazaTagFilter}
-        onSelectPlazaTagFilter={setPlazaTagFilter}
-        // Knowledge 相关
-        knowledgeBases={knowledgeBases}
-        selectedKbId={selectedKbId}
-        onSelectKb={(id) => {
-          setSelectedKbId(id);
-          setActiveMainTab('knowledge');
-        }}
-        onCreateKb={() => setActiveMainTab('knowledge')}
-        // Settings 相关
-        activeSettingsTab={activeSettingsTab}
-        onSelectSettingsTab={(tab) => {
-          setActiveSettingsTab(tab);
-          setActiveMainTab('settings');
-        }}
-      />
+      {!sidebarCollapsed && (
+        <SubSidebar
+          activeMainTab={activeMainTab}
+          currentWorkspace={currentWorkspace}
+          // Chat 相关
+          conversations={conversations}
+          activeConversationId={activeConversationId}
+          onSelectConversation={(id) => {
+            setActiveConversationId(id);
+            setActiveMainTab('chat');
+          }}
+          onNewConversation={handleNewConversation}
+          onDeleteConversation={handleDeleteConversation}
+          streamingConversationIds={Object.keys(streamingSessions).filter(
+            (id) => streamingSessions[id]?.isStreaming
+          )}
+          // Plaza 相关
+          plazaCategory={plazaCategory}
+          onSelectPlazaCategory={setPlazaCategory}
+          plazaTagFilter={plazaTagFilter}
+          onSelectPlazaTagFilter={setPlazaTagFilter}
+          // Knowledge 相关
+          knowledgeBases={knowledgeBases}
+          selectedKbId={selectedKbId}
+          onSelectKb={(id) => {
+            setSelectedKbId(id);
+            setActiveMainTab('knowledge');
+          }}
+          onCreateKb={() => setActiveMainTab('knowledge')}
+          // Settings 相关
+          activeSettingsTab={activeSettingsTab}
+          onSelectSettingsTab={(tab) => {
+            setActiveSettingsTab(tab);
+            setActiveMainTab('settings');
+          }}
+        />
+      )}
 
       {/* 3. 主工作区 View (自适应 flex-1) */}
       <main className="flex-1 h-full min-w-0 overflow-hidden bg-slate-950">
         {activeMainTab === 'chat' && (
           <ChatArea
+            user={user}
             currentConversation={conversations.find((c) => c.id === activeConversationId) || null}
             messages={currentMessages}
             streamingContent={currentStreamingContent}
@@ -622,12 +654,16 @@ export default function App() {
             models={models}
             selectedModelId={selectedModelId}
             skills={skills}
+            knowledgeBases={knowledgeBases}
             onSelectModel={(id) => setSelectedModelId(id)}
             onSendMessage={handleSendMessage}
             onStopStreaming={handleStopStreaming}
             onNavigateToPlaza={() => setActiveMainTab('plaza')}
             onNavigateToSettings={() => setActiveMainTab('settings')}
             onApproveAction={handleApproveAction}
+            onDeleteMessage={handleDeleteMessage}
+            onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
+            onForkConversation={handleForkConversation}
           />
         )}
 
@@ -639,6 +675,10 @@ export default function App() {
             installedSkills={skills}
             onRefreshTools={() => api.listTools().then(setTools)}
             onRefreshSkills={() => api.listSkills().then(setSkills)}
+            onNavigateToSettings={(tab) => {
+              setActiveSettingsTab(tab);
+              setActiveMainTab('settings');
+            }}
           />
         )}
 

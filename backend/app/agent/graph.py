@@ -207,6 +207,7 @@ def create_agent_graph(model_config: ModelConfig, workspace_id: str):
 
         # 检查是否激活专业技能 (Skill)
         skill_code = state.get("skill_code")
+        active_skill_bound_tools: List[str] = []
         if skill_code:
             async with AsyncSessionLocal() as session:
                 stmt = select(Skill).where(
@@ -216,9 +217,22 @@ def create_agent_graph(model_config: ModelConfig, workspace_id: str):
                 )
                 skill = (await session.execute(stmt)).scalar_one_or_none()
                 if skill:
+                    if skill.bound_tools:
+                        try:
+                            bt = json.loads(skill.bound_tools) if isinstance(skill.bound_tools, str) else skill.bound_tools
+                            if isinstance(bt, list):
+                                active_skill_bound_tools = bt
+                        except Exception:
+                            pass
+
+                    bound_hint = ""
+                    if active_skill_bound_tools:
+                        bound_hint = f"\n【本技能专属绑定的 MCP 扩展工具】: {', '.join(active_skill_bound_tools)}，请在处理任务时优先调度使用这些工具。\n"
+
                     sys_prompt = (
                         f"【当前激活专业技能: {skill.name} (/{skill.code})】\n"
-                        f"{skill.system_prompt}\n\n"
+                        f"{skill.system_prompt}\n"
+                        f"{bound_hint}\n"
                         f"【系统全局准则】:\n{sys_prompt}"
                     )
 
@@ -260,8 +274,10 @@ def create_agent_graph(model_config: ModelConfig, workspace_id: str):
                             cfg = json.loads(wt.config_json) if wt.config_json else {}
                         except Exception:
                             cfg = {}
-                        url = cfg.get("server_url") or cfg.get("url") or "http://127.0.0.1:8000/api/v1/tools/mcp-mock"
-                        mcp_lines.append(f"- MCP 服务: {wt.name} | 端点: {url} | 功能描述: {wt.description}")
+                        url = cfg.get("server_url") or cfg.get("url") or (f"stdio://{cfg.get('command')}" if cfg.get("command") else "http://127.0.0.1:8000/api/v1/tools/mcp-mock")
+                        is_bound = wt.name in active_skill_bound_tools or wt.id in active_skill_bound_tools
+                        bound_tag = " [★ 当前技能专属绑定]" if is_bound else ""
+                        mcp_lines.append(f"- MCP 服务: {wt.name}{bound_tag} | 端点: {url} | 功能描述: {wt.description}")
                 if mcp_lines:
                     sys_prompt += (
                         "\n\n【空间已挂载的外部 MCP 协议服务 (Model Context Protocol)】:\n"

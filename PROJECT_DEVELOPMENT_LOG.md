@@ -358,8 +358,40 @@ document_chunks (id, document_id, knowledge_base_id, workspace_id, chunk_index, 
   5. `tasks`：APScheduler 定时任务调度、Cron 配置与主动执行；
   6. `knowledge`：知识库资产概览与混合检索参数调优。
 
+## 九、自定义 MCP 与 Skill 全生命周期管理与生态市场闭环（对齐 Cherry Studio）
+
+全面对齐 Cherry Studio 桌面端扩展架构，补齐自定义 MCP 与自定义 Skill 的全生命周期管理（增、删、改、查、启停、测试探针）以及与生态广场（Marketplace）的双向打通：
+
+### 1. MCP 全生命周期与 Cherry Studio 协议兼容
+* **双模式接入录入**：
+  * **可视化表单**：支持 `Stdio 进程类`（`command`、`args`、`env` 环境变量）与 `SSE / HTTP 远程端点类`（`server_url`、`headers` 鉴权请求头）；
+  * **JSON / Cherry 规范一键导入**：支持直接粘贴 Claude Desktop / Cherry Studio 标准 `mcpServers` JSON 片段，具备单服务与多服务批量自动解析入库能力。
+* **改（编辑更新）与测试探针**：
+  * 支持对已装载 MCP 服务进行二次配置编辑与参数保存；
+  * 内置 **在线连通性测试探针（Test MCP）**：通过后端 `MCPService` 实时握手，测量网络连通性并自动发现和展示暴露的标准工具清单（Tool Tags）。
+* **卡片态势与启停/卸载**：
+  * 卡片直观呈现协议类别徽章（stdio / sse / builtin）、命令与端点代码预览；
+  * 支持随时单键启停开关与完全卸载删除。
+
+### 2. Skill 专业技能自定义与 MCP 工具绑定
+* **深度定制与 Prompt 工程**：
+  * 支持自定义技能名称、快捷调用指令（`/{code}`）、分类标签、详细说明与长文本 System Prompt；
+* **MCP 工具绑定选择器（Bound Tools Selector）**：
+  * 在技能配置中提供空间已启用 MCP 工具的多选面板，支持一键“全选”与“清空”；
+  * 绑定的专属 MCP 服务会同步呈现于技能卡片徽章中；
+* **智能体执行引擎联动（`graph.py`）**：
+  * 当用户键入 `/{code}` 激活专业技能时，智能体系统提示词中自动注入当前技能专属绑定的 MCP 工具，引导模型优先调度该技能专有工具集。
+
+### 3. 生态广场与设置中心双向打通
+* **生态市场（Marketplace）态势感知**：
+  * 广场卡片动态感知识别当前空间是否已安装该 MCP 或技能；
+  * 已安装项直接呈现“已装载”徽章，并提供“配置 / 管理”或“二次编辑”跳转入口；
+* **快速创建直达**：
+  * 广场顶部常驻“自定义接入 MCP”与“创建自定义技能”操作入口，实现生态装载与个性化定制无缝贯通。
+
 ---
 
 *（本文档随工程迭代持续更新维护）*
+
 
 
