@@ -22,6 +22,7 @@ interface SidebarProps {
   onNewConversation: () => void;
   onDeleteConversation: (id: string) => void;
   onLogout: () => void;
+  streamingConversationIds?: string[];
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -36,6 +37,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onNewConversation,
   onDeleteConversation,
   onLogout,
+  streamingConversationIds = [],
 }) => {
   const [showWsMenu, setShowWsMenu] = useState(false);
   const [showNewWsInput, setShowNewWsInput] = useState(false);
@@ -175,6 +177,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ) : (
           conversations.map((conv) => {
             const isActive = conv.id === activeConversationId;
+            const isGenerating = streamingConversationIds.includes(conv.id);
             return (
               <div
                 key={conv.id}
@@ -185,12 +188,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'
                 }`}
               >
-                <div className="flex items-center gap-2 truncate">
-                  <MessageSquare
-                    className={`w-3.5 h-3.5 shrink-0 ${
-                      isActive ? 'text-indigo-400' : 'text-slate-500'
-                    }`}
-                  />
+                <div className="flex items-center gap-2 truncate" title={isGenerating ? '智能体正在生成中...' : conv.title}>
+                  {isGenerating ? (
+                    <span className="flex h-3.5 w-3.5 relative items-center justify-center shrink-0">
+                      <span className="animate-ping absolute inline-flex h-2.5 w-2.5 rounded-full bg-indigo-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-indigo-500"></span>
+                    </span>
+                  ) : (
+                    <MessageSquare
+                      className={`w-3.5 h-3.5 shrink-0 ${
+                        isActive ? 'text-indigo-400' : 'text-slate-500'
+                      }`}
+                    />
+                  )}
                   <span className="truncate">{conv.title}</span>
                 </div>
                 <button

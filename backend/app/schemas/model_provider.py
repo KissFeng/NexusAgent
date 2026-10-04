@@ -30,3 +30,28 @@ class ModelConfigResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+class TestModelConnectionRequest(BaseModel):
+    model_id: str | None = None
+    provider: str | None = "custom"
+    model_name: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+
+class TestModelConnectionResponse(BaseModel):
+    success: bool
+    latency_ms: int | None = None
+    message: str
+    sample_response: str | None = None
+    available_models: list[str] = []
+
+class DiscoverModelsRequest(BaseModel):
+    model_id: str | None = None
+    provider: str | None = "custom"
+    base_url: str | None = None
+    api_key: str | None = None
+
+class DiscoverModelsResponse(BaseModel):
+    success: bool
+    models: list[str] = []
+    message: str

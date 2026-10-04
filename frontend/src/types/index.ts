@@ -98,3 +98,42 @@ export interface DocumentChunk {
   qdrant_point_id: string;
   created_at: string;
 }
+
+export interface Skill {
+  id: string;
+  workspace_id: string;
+  name: string;
+  code: string;
+  category: string;
+  description: string;
+  system_prompt: string;
+  bound_tools: string[];
+  is_enabled: boolean;
+  is_preset: boolean;
+  created_at: string;
+}
+
+export interface ToolConfig {
+  id: string;
+  workspace_id: string;
+  tool_type: string;
+  name: string;
+  description: string;
+  config: Record<string, any>;
+  is_enabled: boolean;
+  created_at: string;
+}
+
+export interface Memory {
+  id: string;
+  workspace_id: string;
+  user_id: string;
+  category: 'preference' | 'fact' | 'episodic';
+  content: string;
+  confidence: number;
+  source_conversation_id?: string;
+  recall_count: number;
+  last_recalled_at?: string;
+  created_at: string;
+  updated_at: string;
+}

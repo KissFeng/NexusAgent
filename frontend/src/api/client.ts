@@ -8,6 +8,9 @@ import type {
   Document,
   Citation,
   PendingApproval,
+  Skill,
+  ToolConfig,
+  Memory,
 } from '../types';
 
 const BASE_URL = '/api/v1';
@@ -90,6 +93,47 @@ export const api = {
     request<{ message: string }>(`/models/${id}`, {
       method: 'DELETE',
     }),
+  testModelConnection: (data: {
+    model_id?: string;
+    provider?: string;
+    model_name?: string;
+    base_url?: string;
+    api_key?: string;
+  }) =>
+    request<{
+      success: boolean;
+      latency_ms?: number;
+      message: string;
+      sample_response?: string;
+      available_models?: string[];
+    }>('/models/test-connection', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  probeExistingModel: (modelId: string) =>
+    request<{
+      success: boolean;
+      latency_ms?: number;
+      message: string;
+      sample_response?: string;
+      available_models?: string[];
+    }>(`/models/${modelId}/probe`, {
+      method: 'POST',
+    }),
+  discoverModels: (data: {
+    model_id?: string;
+    provider?: string;
+    base_url?: string;
+    api_key?: string;
+  }) =>
+    request<{
+      success: boolean;
+      models: string[];
+      message: string;
+    }>('/models/discover-models', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 
   // Conversations
   listConversations: () => request<Conversation[]>('/conversations'),
@@ -148,6 +192,100 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+
+  // Skills
+  listSkills: () => request<Skill[]>('/skills'),
+  createSkill: (data: {
+    name: string;
+    code: string;
+    category?: string;
+    description?: string;
+    system_prompt: string;
+    bound_tools?: string[];
+  }) =>
+    request<Skill>('/skills', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateSkill: (
+    id: string,
+    data: Partial<{
+      name: string;
+      category: string;
+      description: string;
+      system_prompt: string;
+      bound_tools: string[];
+      is_enabled: boolean;
+    }>
+  ) =>
+    request<Skill>(`/skills/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteSkill: (id: string) =>
+    request<{ message: string }>(`/skills/${id}`, {
+      method: 'DELETE',
+    }),
+
+  // Tools
+  listTools: () => request<ToolConfig[]>('/tools'),
+  createTool: (data: {
+    tool_type: string;
+    name: string;
+    description?: string;
+    config?: Record<string, any>;
+    is_enabled?: boolean;
+  }) =>
+    request<ToolConfig>('/tools', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateTool: (
+    id: string,
+    data: Partial<{
+      name: string;
+      description: string;
+      config: Record<string, any>;
+      is_enabled: boolean;
+    }>
+  ) =>
+    request<ToolConfig>(`/tools/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteTool: (id: string) =>
+    request<{ message: string }>(`/tools/${id}`, {
+      method: 'DELETE',
+    }),
+  testMcpServer: (
+    serverUrl: string,
+    headers?: Record<string, string>,
+    protocol?: string
+  ) =>
+    request<{ success: boolean; tools: any[]; message: string }>('/tools/test-mcp', {
+      method: 'POST',
+      body: JSON.stringify({ server_url: serverUrl, headers, protocol }),
+    }),
+
+  // Long-Term Memories
+  listMemories: () => request<Memory[]>('/memories'),
+  createMemory: (data: { category: string; content: string; confidence?: number }) =>
+    request<Memory>('/memories', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateMemory: (
+    id: string,
+    data: Partial<{ category: string; content: string; confidence: number }>
+  ) =>
+    request<Memory>(`/memories/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteMemory: (id: string) =>
+    request<{ message: string }>(`/memories/${id}`, {
+      method: 'DELETE',
+    }),
 };
 
 // SSE Chat Streaming Client (Supports LangGraph Interrupts & Citations)
@@ -155,6 +293,7 @@ export async function streamChat({
   conversationId,
   content,
   modelConfigId,
+  skillCode,
   onStart,
   onChunk,
   onCitation,
@@ -166,7 +305,8 @@ export async function streamChat({
   conversationId?: string;
   content: string;
   modelConfigId?: string;
-  onStart?: (info: { conversation_id: string; title: string }) => void;
+  skillCode?: string;
+  onStart?: (info: { conversation_id: string; title: string; skill_code?: string }) => void;
   onChunk: (chunk: string) => void;
   onCitation?: (citation: Citation) => void;
   onApprovalRequired?: (approval: PendingApproval) => void;
@@ -191,6 +331,7 @@ export async function streamChat({
         conversation_id: conversationId || null,
         content,
         model_config_id: modelConfigId || null,
+        skill_code: skillCode || null,
       }),
       signal,
     });
@@ -264,7 +405,7 @@ export async function streamResumeApproval({
 async function parseEventStream(
   res: Response,
   callbacks: {
-    onStart?: (info: { conversation_id: string; title: string }) => void;
+    onStart?: (info: { conversation_id: string; title: string; skill_code?: string }) => void;
     onChunk: (chunk: string) => void;
     onCitation?: (citation: Citation) => void;
     onApprovalRequired?: (approval: PendingApproval) => void;
@@ -296,7 +437,11 @@ async function parseEventStream(
       try {
         const payload = JSON.parse(payloadStr);
         if (payload.type === 'start' && callbacks.onStart) {
-          callbacks.onStart({ conversation_id: payload.conversation_id, title: payload.title });
+          callbacks.onStart({
+            conversation_id: payload.conversation_id,
+            title: payload.title,
+            skill_code: payload.skill_code,
+          });
         } else if (payload.type === 'chunk') {
           callbacks.onChunk(payload.content);
         } else if (payload.type === 'citation' && callbacks.onCitation) {

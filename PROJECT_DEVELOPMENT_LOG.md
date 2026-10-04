@@ -39,7 +39,7 @@
 | :--- | :--- | :---: |
 | **第 1 阶段** | 跑通骨架与对话：FastAPI 基础、SQLAlchemy 异步 ORM、多租户空间模型、多模型工厂、React SSE 流式对话 | **已完成** |
 | **第 2 阶段** | Agent 核心与 RAG 落地：LangGraph 状态图、Checkpointer 持久化、Qdrant 向量检索、混合检索 RAG、审批中断 | **已完成** |
-| **第 3 阶段** | 能力拓展与工具生态：Celery/Redis 异步任务、工具调用标准、技能机制、MCP 协议、长期记忆 | 待开始 |
+| **第 3 阶段** | 能力拓展与工具生态：工具调用标准、专业技能体系、MCP 协议网关、长期记忆沉淀、子智能体委派、多会话并发流式隔离 | **已完成** |
 | **第 4 阶段** | 自动化与外部渠道：定时任务调度机制、企微/飞书/钉钉 Webhook 验签解密与机器人互通 | 待开始 |
 | **第 5 阶段** | 企业级治理与上线结项：用量统计算法、审计日志、Docker Compose 生产调优、压测与论文结项 | 待开始 |
 
@@ -184,6 +184,114 @@ document_chunks (id, document_id, knowledge_base_id, workspace_id, chunk_index, 
 * **默认模型标识与切换**：
   * 对当前生效的默认模型，展示高亮金色徽标【★ 默认模型】；
   * 对非默认模型，提供直观的【设为默认】按钮，点击立即排他性切换并弹出轻量操作反馈。
+
+---
+
+## 五、第 3 阶段实施记录：能力拓展与工具生态
+
+### 1. 核心设计与知识点
+
+#### 1.1 长期记忆沉淀与个性化消歧召回（`MemoryService`）
+* **自动提炼机制**：每轮对话生成完成后，后台通过轻量 LLM 自动分析用户意图，从对话中抽取用户偏好、背景信息、工作习惯（`category`: `preference`, `fact`, `constraint`），自动沉淀到 PostgreSQL `memories` 表。
+* **混合向量记忆（Qdrant `agent_memories`）**：将记忆内容生成 1024 维向量存储于 Qdrant，并附带 `user_id` 与 `workspace_id` 过滤条件。
+* **智能消歧与召回注入**：当用户发起新提问时，系统在 LangGraph Agent 执行前自动检索与当前 Query 最相关的用户长期记忆，作为动态上下文注入 Agent 提示词，实现“千人千面、随用随记”的长期偏好对齐。
+
+#### 1.2 工业级 MCP（Model Context Protocol）协议网关（`MCPService`）
+* **标准化工具集成**：引入 Anthropic 主导的 `mcp` 官方 SDK（`mcp>=1.3.0`），支持以标准 JSON-RPC 规范接入外部独立 MCP Server（Stdio 与 SSE 协议）。
+* **动态工具发现与装载**：系统启动或工具启用时，自动与 MCP Server 握手执行 `list_tools`，将返回的 Tool Schema 动态转译为 LangChain 标准工具格式。
+* **隔离调用与容错**：工具执行统一经由异步安全沙箱，当外部 MCP Server 超时或异常时，执行回退并由 Agent 进行自我修正。
+
+#### 1.3 显式子智能体委派架构（Supervisor-Worker 模式 / `SubagentService`）
+* **主从图拓扑**：主智能体作为 Supervisor 负责顶层规划与结果汇总；定义 `delegate_subtask` 工具，使 Supervisor 能够将复杂的子问题（如深度检索、代码编写、数据对比）委派给独立的 Worker Agent。
+* **上下文隔离与独立上下文栈**：Worker Agent 拥有独立的提示词配置与专属工具集，独立执行并返回结构化报告，避免主会话上下文窗口膨胀。
+
+#### 1.4 专业技能体系（Skills）与 Slash 快捷交互
+* **技能定义与工具绑定**：内置 4 大核心技能（数据分析师 `data_analyst`、全栈工程师 `fullstack_dev`、学术研究员 `academic_researcher`、企业法务助理 `legal_advisor`），每个技能定义专门的 System Prompt 与预设绑定工具。
+* **Slash 快捷呼出补全**：前端输入框键入 `/` 即可触发键盘交互式技能建议列表，支持按上下键切换并按 Tab / Enter 快捷填充，挂载后直观展示技能指示器。
+* **原生安全沙箱工具**：集成 DuckDuckGo 互联网实时搜索、Python 安全计算执行沙箱，满足复杂数学运算与实时资讯查询。
+
+---
+
+## 六、多会话并发流式隔离架构（Multi-Session Streaming Isolation）
+
+针对多会话切换场景中容易出现的“会话 A 正在流式生成时切换到会话 B，导致会话 A 的输出串流到会话 B，且完成时覆盖会话 B 历史”的经典前端状态串流 Bug，设计并落地了按会话作用域隔离的流式状态管理架构。
+
+### 1. 架构瓶颈根因定位
+
+1. **单点全局标量污染**：前端原有的 `isStreaming`、`streamingContent`、`streamingCitations`、`pendingApproval` 等状态均为全局单一状态。`ChatArea` 直接读取全局状态渲染，只要有任意会话在生成，当前视口就会强制展示该流式内容。
+2. **跨会话历史粗暴覆盖**：在会话 A 的 `streamChat.onDone` 中直接执行 `setMessages(updatedMsgs)`，若此时用户已切换到会话 B，会话 B 的当前消息列表会被会话 A 的完成结果粗暴覆盖。
+3. **流式并发拦截冲突**：全局 `if (isStreaming) return;` 导致任意一个会话在生成时，其他所有会话的输入均被禁用，无法实现多会话并行提问。
+
+### 2. 会话作用域隔离方案设计
+
+```
+                    ┌──────────────────────────────────────────────┐
+                    │               App (Root State)               │
+                    │  - activeConversationId: "conv-B"            │
+                    │  - activeConversationIdRef.current: "conv-B" │
+                    └───────┬──────────────────────────────┬───────┘
+                            │                              │
+            ┌───────────────▼──────────────┐ ┌─────────────▼────────────────┐
+            │  messagesByConv (会话消息缓存)│ │  streamingSessions (流式会话) │
+            │  {                           │ │  {                           │
+            │    "conv-A": [Msg1, Msg2...],│ │    "conv-A": {               │
+            │    "conv-B": [Msg3, Msg4...] │ │      isStreaming: true,      │
+            │  }                           │ │      content: "A生成中...",   │
+            └───────────────┬──────────────┘ │      controller: AbortCtrl   │
+                            │                │    }                         │
+                            │                │  }                           │
+                            │                └─────────────┬────────────────┘
+                            │                              │
+    ┌───────────────────────▼──────────────────────────────▼───────────────────────┐
+    │                        当前活动视口 (ChatArea)                                 │
+    │  messages = messagesByConv["conv-B"]  (会话 B 的独立消息，毫秒级切换，零闪烁)  │
+    │  isStreaming = streamingSessions["conv-B"]?.isStreaming || false (允许提问)  │
+    │  streamingContent = streamingSessions["conv-B"]?.content || "" (彻底隔离)   │
+    └──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 3. 关键实现特性
+
+1. **双字典状态隔离（`messagesByConv` & `streamingSessions`）**：
+   * 将会话消息和流式状态完全以 `conversationId` 为键进行字典化隔离；
+   * 会话 A 收到 SSE chunk 时仅增量修改 `streamingSessions["conv-A"].content`，绝不触碰任何其他会话；
+   * 会话 A 收到 `[DONE]` 时仅更新 `messagesByConv["conv-A"]`，完全不干扰正在查看的会话 B。
+2. **后台生成无感保留与毫秒级恢复**：
+   * 用户在会话 A 发送长指令后可随意切换至会话 B、会话 C 甚至新建会话；
+   * 会话 A 的后台推理、工具调用、长期记忆沉淀在后端与后台 SSE 链路中完整运行；
+   * 当用户切回会话 A 时，实时无缝接回会话 A 当前已生成的流式打字进度，生成完成后自动以 Markdown 完整呈现。
+3. **多会话并行提问与独立中断**：
+   * 各会话生成状态完全独立，用户可在会话 A 生成的同时在会话 B 发送新问题，两个会话同时流式响应；
+   * 点击【停止生成】仅调用当前会话的 `AbortController.abort()`，后台其他会话的生成不受任何影响。
+4. **侧边栏呼吸灯态势感知**：
+   * 侧边栏根据 `streamingSessions[conv.id]?.isStreaming` 动态为后台正在推理生成的会话渲染微型脉冲呼吸灯（`animate-ping`），用户可直观获知所有会话的执行状态。
+
+---
+
+## 五、模型供应商连通性探测与端点模型发现体系
+
+为解决多模型配置中“填错 Base URL”、“API Key 误输导致静默报错”、“模型标识拼写错误”以及“不知道供应商支持哪些模型”等高频痛点，系统构建了端到端模型健康探测与端点发现体系。
+
+### 1. 核心架构与功能设计
+
+1. **多级实时健康度与连通性探测（`ModelProbeService.test_connection`）**：
+   * **非流式极简 Token 真实推理**：后端向目标端点发起最小 Token 消耗的推理测试，实测端点是否可用；
+   * **高精度网络延迟测量（Latency Ping）**：毫秒级度量从请求发出到收到模型回复的真实往返延迟；
+   * **多维度智能错误诊断**：
+     * `401 / AuthenticationError`：明确提示 API Key 无效、已过期或无访问权限；
+     * `404 / NotFoundError`：明确提示模型标识未识别或端点路径不匹配；
+     * `402 / QuotaExceeded`：明确提示账户余额不足或配额已耗尽；
+     * `429 / RateLimit`：明确提示触发速率限制，并给出调优建议；
+     * `ConnectTimeout / ConnectError`：网络超时或连接被拒检测，提示检查代理配置与监听端口。
+2. **端点可用模型清单自动探测（`ModelProbeService.discover_models`）**：
+   * 支持标准 OpenAI 规范的 `/models` 接口（兼容 SiliconFlow、DeepSeek、OpenAI、vLLM、OneAPI 等）；
+   * 支持 Ollama 本地端点的 `/api/tags` 与 `/v1/models`；
+   * 自动解析并过滤出可用模型标识列表，前端以标签形式直观列出；
+   * 点击任意探测到的模型标签，自动填充至输入框，彻底避免手动打错 model id。
+3. **前端全局态势感知与一键测速**：
+   * **已配置模型卡片**：各模型卡片常驻【探测】按钮，实时呈现“🟢 正常 248ms”或“🔴 异常”徽标，支持展开查看模型回包样例；
+   * **一键测速全部**：支持对工作区内所有已配置模型进行并发测速，快速比选当前最优供应商与网络延迟；
+   * **表单即时验证**：在添加或编辑模型时，支持随时点击【测试连接与调用】与【探测端点模型】，保存前即确认 100% 可用。
 
 ---
 

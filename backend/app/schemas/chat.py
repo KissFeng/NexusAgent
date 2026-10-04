@@ -33,3 +33,4 @@ class ChatStreamRequest(BaseModel):
     conversation_id: str | None = None  # If None, create new conversation automatically
     content: str = Field(min_length=1)
     model_config_id: str | None = None  # If None, use workspace default model
+    skill_code: str | None = None  # 可选指定的 Skill 技能标识

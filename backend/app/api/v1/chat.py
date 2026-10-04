@@ -22,6 +22,8 @@ from app.schemas.chat import (
 )
 from app.api.deps import get_current_user, get_current_workspace
 from app.agent.graph import create_agent_graph
+from app.services.skill_service import SkillService
+from app.services.memory_service import MemoryService
 
 router = APIRouter(prefix="", tags=["Chat & Agent"])
 
@@ -219,9 +221,19 @@ async def chat_stream(
         )
         model_config = (await db.execute(m_stmt)).scalars().first()
 
-    # 4. SSE 异步流式生成器 (基于 LangGraph 状态图执行)
+    # 提取用户 Slash 技能指令或入参传入的技能
+    slash_skill, pure_content = SkillService.parse_slash_skill(req.content)
+    active_skill_code = req.skill_code or slash_skill
+    effective_content = pure_content if slash_skill else req.content
+
     async def event_generator():
-        yield f"data: {json.dumps({'type': 'start', 'conversation_id': conversation_id, 'title': conv.title}, ensure_ascii=False)}\n\n"
+        start_payload = {
+            'type': 'start',
+            'conversation_id': conversation_id,
+            'title': conv.title,
+            'skill_code': active_skill_code,
+        }
+        yield f"data: {json.dumps(start_payload, ensure_ascii=False)}\n\n"
 
         if not model_config or not model_config.api_key:
             err_msg = (
@@ -250,11 +262,13 @@ async def chat_stream(
         config = {"configurable": {"thread_id": conversation_id}}
 
         initial_state = {
-            "messages": [HumanMessage(content=req.content)],
+            "messages": [HumanMessage(content=effective_content)],
             "workspace_id": workspace.id,
+            "user_id": user.id,
             "kb_ids": None,
             "citations": [],
             "model_config_id": model_config.id,
+            "skill_code": active_skill_code,
         }
 
         full_content = []
@@ -320,6 +334,19 @@ async def chat_stream(
                 )
                 session.add(assistant_msg)
                 await session.commit()
+
+            if model_config and model_config.api_key:
+                # 异步后台提炼与沉淀长期记忆 (非阻塞执行)
+                asyncio.create_task(
+                    MemoryService.extract_and_save_memories(
+                        user_id=user.id,
+                        workspace_id=workspace.id,
+                        conversation_id=conversation_id,
+                        user_content=effective_content,
+                        assistant_content=final_answer,
+                        model_config=model_config,
+                    )
+                )
 
         yield f"data: {json.dumps({'type': 'done', 'conversation_id': conversation_id}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"

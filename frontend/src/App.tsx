@@ -8,12 +8,24 @@ import {
   streamChat,
   streamResumeApproval,
 } from './api/client';
-import type { User, Workspace, ModelConfig, Conversation, Message, Citation, PendingApproval } from './types';
+import type { User, Workspace, ModelConfig, Conversation, Message, Citation, PendingApproval, Skill, ToolConfig, Memory } from './types';
 import { AuthModal } from './components/AuthModal';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
 import { ModelConfigModal } from './components/ModelConfigModal';
 import { KnowledgeBaseModal } from './components/KnowledgeBaseModal';
+import { SkillModal } from './components/SkillModal';
+import { ToolModal } from './components/ToolModal';
+import { MemoryModal } from './components/MemoryModal';
+
+interface StreamingSession {
+  conversationId: string;
+  isStreaming: boolean;
+  content: string;
+  citations: Citation[];
+  pendingApproval: PendingApproval | null;
+  controller: AbortController;
+}
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -24,18 +36,24 @@ export default function App() {
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const activeConversationIdRef = useRef<string | null>(activeConversationId);
+  activeConversationIdRef.current = activeConversationId;
 
-  // Streaming & RAG Citations & LangGraph Interrupts
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [streamingContent, setStreamingContent] = useState('');
-  const [streamingCitations, setStreamingCitations] = useState<Citation[]>([]);
-  const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
+  // 会话隔离：按 conversationId 维护消息缓存与流式 Session
+  const [messagesByConv, setMessagesByConv] = useState<Record<string, Message[]>>({});
+  const [streamingSessions, setStreamingSessions] = useState<Record<string, StreamingSession>>({});
 
   // Modals
   const [isModelModalOpen, setIsModelModalOpen] = useState(false);
   const [isKbModalOpen, setIsKbModalOpen] = useState(false);
+  const [isSkillModalOpen, setIsSkillModalOpen] = useState(false);
+  const [isToolModalOpen, setIsToolModalOpen] = useState(false);
+  const [isMemoryModalOpen, setIsMemoryModalOpen] = useState(false);
+
+  // Skills, Tools & Memories
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [tools, setTools] = useState<ToolConfig[]>([]);
+  const [memories, setMemories] = useState<Memory[]>([]);
 
   // 1. Initial auth check
   useEffect(() => {
@@ -80,12 +98,18 @@ export default function App() {
 
   const loadWorkspaceResources = async () => {
     try {
-      const [modelList, convList] = await Promise.all([
+      const [modelList, convList, skillList, toolList, memList] = await Promise.all([
         api.listModels(),
         api.listConversations(),
+        api.listSkills().catch(() => [] as Skill[]),
+        api.listTools().catch(() => [] as ToolConfig[]),
+        api.listMemories().catch(() => [] as Memory[]),
       ]);
       setModels(modelList);
       setConversations(convList);
+      setSkills(skillList);
+      setTools(toolList);
+      setMemories(memList);
 
       const defaultModel = modelList.find((m) => m.is_default) || modelList[0];
       if (defaultModel) {
@@ -96,7 +120,7 @@ export default function App() {
         setActiveConversationId(convList[0].id);
       } else {
         setActiveConversationId(null);
-        setMessages([]);
+        setMessagesByConv({});
       }
     } catch (err) {
       console.error('Failed to load workspace resources:', err);
@@ -105,19 +129,45 @@ export default function App() {
 
   // 4. Load messages when active conversation changes
   useEffect(() => {
-    if (!activeConversationId) {
-      setMessages([]);
-      setPendingApproval(null);
-      setStreamingCitations([]);
+    if (!activeConversationId || activeConversationId.startsWith('draft-')) {
       return;
     }
+    let isCancelled = false;
     api.getMessages(activeConversationId)
-      .then((msgs) => setMessages(msgs))
-      .catch((err) => console.error('Failed to load messages:', err));
+      .then((msgs) => {
+        if (!isCancelled) {
+          setMessagesByConv((prev) => {
+            const currentList = prev[activeConversationId] || [];
+            const tempMsgs = currentList.filter((m) => m.id.startsWith('temp-'));
+            if (
+              tempMsgs.length > 0 &&
+              !msgs.some((m) => tempMsgs.some((t) => t.content === m.content && t.role === m.role))
+            ) {
+              return {
+                ...prev,
+                [activeConversationId]: [...msgs, ...tempMsgs],
+              };
+            }
+            return {
+              ...prev,
+              [activeConversationId]: msgs,
+            };
+          });
+        }
+      })
+      .catch((err) => {
+        if (!isCancelled) console.error('Failed to load messages:', err);
+      });
+    return () => {
+      isCancelled = true;
+    };
   }, [activeConversationId]);
 
   // Handlers
   const handleSelectWorkspace = (ws: Workspace) => {
+    Object.values(streamingSessions).forEach((s) => s.controller?.abort());
+    setStreamingSessions({});
+    setMessagesByConv({});
     setCurrentWorkspace(ws);
     setStoredWorkspaceId(ws.id);
   };
@@ -134,14 +184,24 @@ export default function App() {
 
   const handleNewConversation = () => {
     setActiveConversationId(null);
-    setMessages([]);
-    setStreamingContent('');
-    setStreamingCitations([]);
-    setPendingApproval(null);
   };
 
   const handleDeleteConversation = async (id: string) => {
     try {
+      if (streamingSessions[id]?.controller) {
+        streamingSessions[id].controller.abort();
+      }
+      setStreamingSessions((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      setMessagesByConv((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+
       await api.deleteConversation(id);
       const remaining = conversations.filter((c) => c.id !== id);
       setConversations(remaining);
@@ -158,35 +218,87 @@ export default function App() {
   };
 
   const handleSendMessage = async (content: string) => {
-    if (isStreaming) return;
+    const convId = activeConversationId || `draft-${Date.now()}`;
+    if (streamingSessions[convId]?.isStreaming) return;
 
     const tempUserMessage: Message = {
       id: `temp-${Date.now()}`,
-      conversation_id: activeConversationId || '',
+      conversation_id: convId,
       role: 'user',
       content,
       token_count: 0,
       created_at: new Date().toISOString(),
     };
-    setMessages((prev) => [...prev, tempUserMessage]);
 
-    setIsStreaming(true);
-    setStreamingContent('');
-    setStreamingCitations([]);
-    setPendingApproval(null);
+    if (!activeConversationId) {
+      setActiveConversationId(convId);
+      activeConversationIdRef.current = convId;
+    }
+
+    setMessagesByConv((prev) => ({
+      ...prev,
+      [convId]: [...(prev[convId] || []), tempUserMessage],
+    }));
 
     const controller = new AbortController();
-    abortControllerRef.current = controller;
 
-    let accumulatedContent = '';
+    setStreamingSessions((prev) => ({
+      ...prev,
+      [convId]: {
+        conversationId: convId,
+        isStreaming: true,
+        content: '',
+        citations: [],
+        pendingApproval: null,
+        controller,
+      },
+    }));
+
+    let targetConvId = convId;
 
     await streamChat({
-      conversationId: activeConversationId || undefined,
+      conversationId: activeConversationId && !activeConversationId.startsWith('draft-') ? activeConversationId : undefined,
       content,
       modelConfigId: selectedModelId || undefined,
       signal: controller.signal,
       onStart: ({ conversation_id, title }) => {
-        setActiveConversationId(conversation_id);
+        if (targetConvId !== conversation_id) {
+          const oldDraftId = targetConvId;
+          targetConvId = conversation_id;
+
+          if (activeConversationIdRef.current === oldDraftId) {
+            setActiveConversationId(conversation_id);
+            activeConversationIdRef.current = conversation_id;
+          }
+
+          setMessagesByConv((prev) => {
+            const msgs = prev[oldDraftId] || [];
+            const next = { ...prev };
+            delete next[oldDraftId];
+            next[conversation_id] = msgs.map((m) =>
+              m.conversation_id === oldDraftId ? { ...m, conversation_id } : m
+            );
+            return next;
+          });
+
+          setStreamingSessions((prev) => {
+            const session = prev[oldDraftId];
+            const next = { ...prev };
+            delete next[oldDraftId];
+            next[conversation_id] = session
+              ? { ...session, conversationId: conversation_id }
+              : {
+                  conversationId: conversation_id,
+                  isStreaming: true,
+                  content: '',
+                  citations: [],
+                  pendingApproval: null,
+                  controller,
+                };
+            return next;
+          });
+        }
+
         setConversations((prev) => {
           if (!prev.some((c) => c.id === conversation_id)) {
             return [
@@ -205,89 +317,208 @@ export default function App() {
         });
       },
       onChunk: (chunk) => {
-        accumulatedContent += chunk;
-        setStreamingContent(accumulatedContent);
+        setStreamingSessions((prev) => {
+          const current = prev[targetConvId];
+          if (!current) return prev;
+          return {
+            ...prev,
+            [targetConvId]: {
+              ...current,
+              content: current.content + chunk,
+            },
+          };
+        });
       },
       onCitation: (citation) => {
-        setStreamingCitations((prev) => {
-          if (!prev.some((c) => c.point_id === citation.point_id)) {
-            return [...prev, citation];
+        setStreamingSessions((prev) => {
+          const current = prev[targetConvId];
+          if (!current) return prev;
+          if (current.citations.some((c) => c.point_id === citation.point_id)) {
+            return prev;
           }
-          return prev;
+          return {
+            ...prev,
+            [targetConvId]: {
+              ...current,
+              citations: [...current.citations, citation],
+            },
+          };
         });
       },
       onApprovalRequired: (approval) => {
-        setPendingApproval(approval);
+        setStreamingSessions((prev) => {
+          const current = prev[targetConvId];
+          if (!current) return prev;
+          return {
+            ...prev,
+            [targetConvId]: {
+              ...current,
+              pendingApproval: approval,
+            },
+          };
+        });
       },
       onError: (err) => {
-        console.error('Chat error:', err);
+        console.error(`Chat error in conversation [${targetConvId}]:`, err);
+        setStreamingSessions((prev) => {
+          const current = prev[targetConvId];
+          if (!current) return prev;
+          return {
+            ...prev,
+            [targetConvId]: {
+              ...current,
+              isStreaming: false,
+            },
+          };
+        });
       },
       onDone: async (finalConvId) => {
-        setIsStreaming(false);
-        setStreamingContent('');
-        if (finalConvId) {
-          const updatedMsgs = await api.getMessages(finalConvId);
-          // 关联当前检索到的溯源证据至最新的 Assistant 消息
-          setStreamingCitations((latestCitations) => {
-            if (latestCitations.length > 0 && updatedMsgs.length > 0) {
+        const actualId = finalConvId || targetConvId;
+
+        let citationsToAttach: Citation[] = [];
+        setStreamingSessions((prev) => {
+          const current = prev[actualId] || prev[targetConvId];
+          if (current) {
+            citationsToAttach = current.citations;
+          }
+          if (!current) return prev;
+          return {
+            ...prev,
+            [actualId]: {
+              ...current,
+              isStreaming: false,
+            },
+          };
+        });
+
+        if (actualId) {
+          try {
+            const updatedMsgs = await api.getMessages(actualId);
+            if (citationsToAttach.length > 0 && updatedMsgs.length > 0) {
               const lastAssistant = [...updatedMsgs].reverse().find((m) => m.role === 'assistant');
               if (lastAssistant) {
-                lastAssistant.citations = [...latestCitations];
+                lastAssistant.citations = [...citationsToAttach];
               }
             }
-            return latestCitations;
-          });
-          setMessages(updatedMsgs);
+            setMessagesByConv((prev) => ({
+              ...prev,
+              [actualId]: updatedMsgs,
+            }));
+          } catch (e) {
+            console.error('Failed to reload messages onDone:', e);
+          }
         }
-        const updatedConvs = await api.listConversations();
-        setConversations(updatedConvs);
+
+        setStreamingSessions((prev) => {
+          const next = { ...prev };
+          delete next[actualId];
+          if (actualId !== targetConvId) delete next[targetConvId];
+          return next;
+        });
+
+        api.listConversations().then(setConversations).catch(console.error);
       },
     });
-
-    setIsStreaming(false);
   };
 
   const handleApproveAction = async (approved: boolean) => {
-    if (!activeConversationId) return;
+    const convId = activeConversationId;
+    if (!convId) return;
 
-    setPendingApproval(null);
-    setIsStreaming(true);
-    setStreamingContent('');
+    const controller = new AbortController();
 
-    let accumulated = '';
+    setStreamingSessions((prev) => {
+      const current = prev[convId];
+      return {
+        ...prev,
+        [convId]: {
+          conversationId: convId,
+          isStreaming: true,
+          content: '',
+          citations: current?.citations || [],
+          pendingApproval: null,
+          controller,
+        },
+      };
+    });
 
     await streamResumeApproval({
-      conversationId: activeConversationId,
+      conversationId: convId,
       approved,
       modelConfigId: selectedModelId || undefined,
       onChunk: (chunk) => {
-        accumulated += chunk;
-        setStreamingContent(accumulated);
+        setStreamingSessions((prev) => {
+          const current = prev[convId];
+          if (!current) return prev;
+          return {
+            ...prev,
+            [convId]: {
+              ...current,
+              content: current.content + chunk,
+            },
+          };
+        });
       },
       onDone: async (finalConvId) => {
-        setIsStreaming(false);
-        setStreamingContent('');
-        if (finalConvId) {
-          const updatedMsgs = await api.getMessages(finalConvId);
-          setMessages(updatedMsgs);
+        const actualId = finalConvId || convId;
+        setStreamingSessions((prev) => {
+          const current = prev[actualId];
+          if (!current) return prev;
+          return {
+            ...prev,
+            [actualId]: {
+              ...current,
+              isStreaming: false,
+            },
+          };
+        });
+
+        if (actualId) {
+          try {
+            const updatedMsgs = await api.getMessages(actualId);
+            setMessagesByConv((prev) => ({
+              ...prev,
+              [actualId]: updatedMsgs,
+            }));
+          } catch (e) {
+            console.error('Failed to reload messages on approval done:', e);
+          }
         }
+
+        setStreamingSessions((prev) => {
+          const next = { ...prev };
+          delete next[actualId];
+          return next;
+        });
       },
       onError: (err) => {
         alert(err);
-        setIsStreaming(false);
+        setStreamingSessions((prev) => {
+          const next = { ...prev };
+          delete next[convId];
+          return next;
+        });
       },
     });
   };
 
   const handleStopStreaming = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
+    if (!activeConversationId) return;
+    const session = streamingSessions[activeConversationId];
+    if (session?.controller) {
+      session.controller.abort();
     }
-    setIsStreaming(false);
+    setStreamingSessions((prev) => {
+      const next = { ...prev };
+      delete next[activeConversationId];
+      return next;
+    });
   };
 
   const handleLogout = () => {
+    Object.values(streamingSessions).forEach((s) => s.controller?.abort());
+    setStreamingSessions({});
+    setMessagesByConv({});
     removeAuthToken();
     setUser(null);
     setWorkspaces([]);
@@ -297,6 +528,13 @@ export default function App() {
   if (!user) {
     return <AuthModal onSuccess={(u) => setUser(u)} />;
   }
+
+  const currentMessages = activeConversationId ? (messagesByConv[activeConversationId] || []) : [];
+  const currentSession = activeConversationId ? streamingSessions[activeConversationId] : null;
+  const currentIsStreaming = !!currentSession?.isStreaming;
+  const currentStreamingContent = currentSession?.content || '';
+  const currentStreamingCitations = currentSession?.citations || [];
+  const currentPendingApproval = currentSession?.pendingApproval || null;
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-slate-950 font-sans antialiased text-slate-100">
@@ -312,22 +550,30 @@ export default function App() {
         onNewConversation={handleNewConversation}
         onDeleteConversation={handleDeleteConversation}
         onLogout={handleLogout}
+        streamingConversationIds={Object.keys(streamingSessions).filter(
+          (id) => streamingSessions[id]?.isStreaming
+        )}
       />
 
       <ChatArea
         currentConversation={conversations.find((c) => c.id === activeConversationId) || null}
-        messages={messages}
-        streamingContent={streamingContent}
-        streamingCitations={streamingCitations}
-        pendingApproval={pendingApproval}
-        isStreaming={isStreaming}
+        messages={currentMessages}
+        streamingContent={currentStreamingContent}
+        streamingCitations={currentStreamingCitations}
+        pendingApproval={currentPendingApproval}
+        isStreaming={currentIsStreaming}
         models={models}
         selectedModelId={selectedModelId}
+        skills={skills}
+        memoryCount={memories.length}
         onSelectModel={(id) => setSelectedModelId(id)}
         onSendMessage={handleSendMessage}
         onStopStreaming={handleStopStreaming}
         onOpenModelConfig={() => setIsModelModalOpen(true)}
         onOpenKnowledgeBase={() => setIsKbModalOpen(true)}
+        onOpenSkills={() => setIsSkillModalOpen(true)}
+        onOpenTools={() => setIsToolModalOpen(true)}
+        onOpenMemories={() => setIsMemoryModalOpen(true)}
         onApproveAction={handleApproveAction}
       />
 
@@ -343,6 +589,33 @@ export default function App() {
       <KnowledgeBaseModal
         isOpen={isKbModalOpen}
         onClose={() => setIsKbModalOpen(false)}
+      />
+
+      <SkillModal
+        isOpen={isSkillModalOpen}
+        onClose={() => setIsSkillModalOpen(false)}
+        skills={skills}
+        onRefresh={() => {
+          api.listSkills().then(setSkills).catch(console.error);
+        }}
+      />
+
+      <ToolModal
+        isOpen={isToolModalOpen}
+        onClose={() => setIsToolModalOpen(false)}
+        tools={tools}
+        onRefresh={() => {
+          api.listTools().then(setTools).catch(console.error);
+        }}
+      />
+
+      <MemoryModal
+        isOpen={isMemoryModalOpen}
+        onClose={() => setIsMemoryModalOpen(false)}
+        memories={memories}
+        onRefresh={() => {
+          api.listMemories().then(setMemories).catch(console.error);
+        }}
       />
     </div>
   );
