@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   api,
@@ -27,6 +27,7 @@ import { AuthModal } from './components/AuthModal';
 import { LeftRail, type MainNavTab } from './components/layout/LeftRail';
 import { SubSidebar, type SettingsSubTab, type PlazaCategory } from './components/layout/SubSidebar';
 import { ChatArea } from './components/ChatArea';
+import { SkillModal } from './components/SkillModal';
 import { PlazaView } from './components/plaza/PlazaView';
 import { KnowledgeBaseView } from './components/knowledge/KnowledgeBaseView';
 import { MemoryView } from './components/memory/MemoryView';
@@ -64,9 +65,13 @@ export default function App() {
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
-  const activeConversationIdRef = useRef<string | null>(activeConversationId);
-  activeConversationIdRef.current = activeConversationId;
+
+  // 1. 通用对话专属活跃会话 ID
+  const [chatConversationId, setChatConversationId] = useState<string | null>(null);
+
+  // 2. 智能体专属状态：选中的智能体 ID + 各智能体当前激活的 Session ID 映射表
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [agentSessionIdBySkill, setAgentSessionIdBySkill] = useState<Record<string, string | null>>({});
 
   // 主导航与子侧边栏模式 (Cherry Studio 经典架构)
   const [activeMainTab, setActiveMainTab] = useState<MainNavTab>('chat');
@@ -88,12 +93,58 @@ export default function App() {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
+  // Agents 专属业务角色管理模态框
+  const [isSkillModalOpen, setIsSkillModalOpen] = useState(false);
+  const [editingSkillForModal, setEditingSkillForModal] = useState<Skill | null>(null);
+  const [skillModalMode, setSkillModalMode] = useState<'none' | 'add' | 'edit'>('none');
+
+  const selectedAgent = useMemo(() => {
+    if (!skills.length) return null;
+    if (selectedAgentId) {
+      return skills.find((s) => s.id === selectedAgentId || s.code === selectedAgentId) || skills[0];
+    }
+    return skills[0];
+  }, [skills, selectedAgentId]);
+
+  // 根据当前一级选项卡与智能体，完全解耦计算当前活跃的会话 ID
+  const activeConversationId = useMemo(() => {
+    if (activeMainTab === 'agents') {
+      if (!selectedAgent) return null;
+      const tracked = agentSessionIdBySkill[selectedAgent.code];
+      if (tracked !== undefined) return tracked;
+      const agentConvs = conversations.filter((c) => c.skill_code === selectedAgent.code);
+      return agentConvs[0]?.id || DRAFT_NEW_ID;
+    }
+    if (activeMainTab === 'chat') {
+      if (chatConversationId) return chatConversationId;
+      const generalConvs = conversations.filter((c) => !c.skill_code);
+      return generalConvs[0]?.id || DRAFT_NEW_ID;
+    }
+    return null;
+  }, [activeMainTab, selectedAgent, agentSessionIdBySkill, conversations, chatConversationId]);
+
+  const activeConversationIdRef = useRef<string | null>(activeConversationId);
+  activeConversationIdRef.current = activeConversationId;
+
   // 统一路由导航方法
   const navigateToTab = (tab: MainNavTab, subId?: string) => {
     setActiveMainTab(tab);
     if (tab === 'chat') {
-      const convId = subId || activeConversationId;
-      navigate(convId ? `/chat/${convId}` : '/chat');
+      const convId = subId || chatConversationId;
+      navigate(convId && !convId.startsWith('draft-') ? `/chat/${convId}` : '/chat');
+    } else if (tab === 'agents') {
+      const targetAgent = skills.find((s) => s.id === subId || s.code === subId) || selectedAgent || skills[0];
+      const targetAgentId = targetAgent?.id || subId || selectedAgentId;
+      if (targetAgent) {
+        const currentConvId = agentSessionIdBySkill[targetAgent.code];
+        navigate(
+          currentConvId && !currentConvId.startsWith('draft-')
+            ? `/agents/${targetAgentId}/${currentConvId}`
+            : `/agents/${targetAgentId}`
+        );
+      } else {
+        navigate('/agents');
+      }
     } else if (tab === 'plaza') {
       const cat = subId || plazaCategory;
       navigate(cat && cat !== 'all' ? `/plaza/${cat}` : '/plaza');
@@ -114,13 +165,33 @@ export default function App() {
     const parts = path.split('/').filter(Boolean);
     const firstPart = parts[0] as MainNavTab | undefined;
     const secondPart = parts[1];
+    const thirdPart = parts[2];
 
     if (!firstPart || firstPart === 'chat') {
       setActiveMainTab('chat');
-      if (secondPart && secondPart !== activeConversationIdRef.current) {
-        setActiveConversationId(secondPart);
-      } else if (!secondPart && activeConversationIdRef.current !== DRAFT_NEW_ID) {
-        setActiveConversationId(DRAFT_NEW_ID);
+      if (secondPart) {
+        setChatConversationId(secondPart);
+      } else {
+        const generalConvs = conversations.filter((c) => !c.skill_code);
+        setChatConversationId(generalConvs[0]?.id || DRAFT_NEW_ID);
+      }
+    } else if (firstPart === 'agents') {
+      setActiveMainTab('agents');
+      const agentId = secondPart || (skills[0]?.id ?? null);
+      if (agentId) {
+        setSelectedAgentId(agentId);
+        const matchedSkill = skills.find((s) => s.id === agentId || s.code === agentId);
+        if (matchedSkill) {
+          if (thirdPart) {
+            setAgentSessionIdBySkill((prev) => ({ ...prev, [matchedSkill.code]: thirdPart }));
+          } else if (agentSessionIdBySkill[matchedSkill.code] === undefined) {
+            const agentConvs = conversations.filter((c) => c.skill_code === matchedSkill.code);
+            setAgentSessionIdBySkill((prev) => ({
+              ...prev,
+              [matchedSkill.code]: agentConvs[0]?.id || DRAFT_NEW_ID,
+            }));
+          }
+        }
       }
     } else if (firstPart === 'plaza') {
       setActiveMainTab('plaza');
@@ -140,7 +211,7 @@ export default function App() {
     } else if (firstPart === 'memory') {
       setActiveMainTab('memory');
     }
-  }, [location.pathname]);
+  }, [location.pathname, skills, conversations]);
 
   const handleForkAtMessage = async (messageId: string) => {
     const convId = activeConversationIdRef.current;
@@ -157,13 +228,17 @@ export default function App() {
       const forkedMsgs = await api.getMessages(newConv.id);
 
       setConversations((prev) => [newConv, ...prev.filter((c) => c.id !== newConv.id)]);
-      setActiveConversationId(newConv.id);
+      if (activeMainTab === 'agents' && selectedAgent) {
+        setAgentSessionIdBySkill((prev) => ({ ...prev, [selectedAgent.code]: newConv.id }));
+        navigate(`/agents/${selectedAgent.id}/${newConv.id}`);
+      } else {
+        setChatConversationId(newConv.id);
+        navigate(`/chat/${newConv.id}`);
+      }
       setMessagesByConv((prev) => ({
         ...prev,
         [newConv.id]: forkedMsgs,
       }));
-      setActiveMainTab('chat');
-      navigate(`/chat/${newConv.id}`);
     } catch (err) {
       console.error('开启分支对话失败:', err);
       alert('开启分支对话失败，请重试');
@@ -240,13 +315,19 @@ export default function App() {
       if (convList.length > 0) {
         const pathParts = window.location.pathname.split('/').filter(Boolean);
         const urlConvId = pathParts[0] === 'chat' ? pathParts[1] : null;
-        const targetId = urlConvId && convList.some((c) => c.id === urlConvId) ? urlConvId : convList[0].id;
-        setActiveConversationId(targetId);
+        const generalConvs = convList.filter((c) => !c.skill_code);
+        const targetId =
+          urlConvId && convList.some((c) => c.id === urlConvId)
+            ? urlConvId
+            : generalConvs[0]?.id || null;
+        setChatConversationId(targetId);
         if (window.location.pathname === '/' || window.location.pathname === '/chat') {
-          navigate(`/chat/${targetId}`, { replace: true });
+          if (targetId) {
+            navigate(`/chat/${targetId}`, { replace: true });
+          }
         }
       } else {
-        setActiveConversationId(null);
+        setChatConversationId(null);
         setMessagesByConv({});
       }
     } catch (err) {
@@ -310,19 +391,54 @@ export default function App() {
   };
 
   const handleNewConversation = () => {
-    // 幂等：若当前已经处于空白新会话状态，直接返回或确保在 /chat
-    if (activeConversationId === DRAFT_NEW_ID || (!activeConversationId && location.pathname === '/chat')) {
-      setActiveMainTab('chat');
-      navigate('/chat');
-      return;
-    }
-    setActiveConversationId(DRAFT_NEW_ID);
+    setChatConversationId(DRAFT_NEW_ID);
     setMessagesByConv((prev) => ({
       ...prev,
       [DRAFT_NEW_ID]: [],
     }));
     setActiveMainTab('chat');
     navigate('/chat');
+  };
+
+  const handleSelectAgent = (agent: Skill) => {
+    setSelectedAgentId(agent.id);
+    const existing = agentSessionIdBySkill[agent.code];
+    const agentConvs = conversations.filter((c) => c.skill_code === agent.code);
+    const targetConvId = existing !== undefined ? existing : (agentConvs[0]?.id || DRAFT_NEW_ID);
+    setAgentSessionIdBySkill((prev) => ({
+      ...prev,
+      [agent.code]: targetConvId,
+    }));
+    setActiveMainTab('agents');
+    navigate(
+      targetConvId && !targetConvId.startsWith('draft-')
+        ? `/agents/${agent.id}/${targetConvId}`
+        : `/agents/${agent.id}`
+    );
+  };
+
+  const handleNewAgentConversation = (agent: Skill) => {
+    setSelectedAgentId(agent.id);
+    setAgentSessionIdBySkill((prev) => ({
+      ...prev,
+      [agent.code]: DRAFT_NEW_ID,
+    }));
+    setMessagesByConv((prev) => ({
+      ...prev,
+      [DRAFT_NEW_ID]: [],
+    }));
+    setActiveMainTab('agents');
+    navigate(`/agents/${agent.id}`);
+  };
+
+  const handleSelectAgentConversation = (agent: Skill, convId: string) => {
+    setSelectedAgentId(agent.id);
+    setAgentSessionIdBySkill((prev) => ({
+      ...prev,
+      [agent.code]: convId,
+    }));
+    setActiveMainTab('agents');
+    navigate(`/agents/${agent.id}/${convId}`);
   };
 
   const handleRenameConversation = async (id: string, newTitle: string) => {
@@ -350,6 +466,10 @@ export default function App() {
       });
     }
 
+    const targetConv = conversations.find((c) => c.id === id);
+    const isAgent = Boolean(targetConv?.skill_code);
+    const skillCode = targetConv?.skill_code;
+
     if (id.startsWith('draft-')) {
       const remaining = conversations.filter((c) => c.id !== id);
       setConversations(remaining);
@@ -358,11 +478,6 @@ export default function App() {
         delete next[id];
         return next;
       });
-      if (activeConversationId === id) {
-        const nextId = remaining.length > 0 ? remaining[0].id : null;
-        setActiveConversationId(nextId);
-        navigate(nextId ? `/chat/${nextId}` : '/chat');
-      }
       return;
     }
 
@@ -376,10 +491,30 @@ export default function App() {
         delete next[id];
         return next;
       });
-      if (activeConversationId === id) {
-        const nextId = remaining.length > 0 ? remaining[0].id : null;
-        setActiveConversationId(nextId);
-        navigate(nextId ? `/chat/${nextId}` : '/chat');
+
+      if (isAgent && skillCode) {
+        if (agentSessionIdBySkill[skillCode] === id) {
+          const nextForAgent = remaining.find((c) => c.skill_code === skillCode);
+          setAgentSessionIdBySkill((prev) => ({
+            ...prev,
+            [skillCode]: nextForAgent?.id || DRAFT_NEW_ID,
+          }));
+          if (selectedAgent?.code === skillCode) {
+            navigate(
+              nextForAgent
+                ? `/agents/${selectedAgent.id}/${nextForAgent.id}`
+                : `/agents/${selectedAgent.id}`
+            );
+          }
+        }
+      } else {
+        if (chatConversationId === id) {
+          const nextGeneral = remaining.find((c) => !c.skill_code);
+          setChatConversationId(nextGeneral?.id || DRAFT_NEW_ID);
+          if (activeMainTab === 'chat') {
+            navigate(nextGeneral ? `/chat/${nextGeneral.id}` : '/chat');
+          }
+        }
       }
     } catch (err) {
       alert('删除失败');
@@ -395,24 +530,29 @@ export default function App() {
 
     if (!convId || convId.startsWith('draft-')) {
       try {
-        // 自动提取标题：如果是分支草稿，保留已有分支标题；否则根据用户第一句话提炼前 24 个字符
+        // 自动提取标题：如果是分支草稿，保留已有分支标题；如果在智能体模式，打上智能体专属前缀
         let autoTitle = '新对话';
         const existingConv = conversations.find((c) => c.id === convId);
         if (existingConv && existingConv.title && existingConv.title !== '新对话') {
           autoTitle = existingConv.title;
+        } else if (activeMainTab === 'agents' && selectedAgent) {
+          const cleanText = content.trim().replace(/^\/[a-zA-Z0-9_-]+\s*/, '').replace(/[\r\n]+/g, ' ').trim();
+          autoTitle = `[${selectedAgent.name}] ${cleanText.slice(0, 18) || '专属指令'}`;
         } else {
           // 清洗开头的技能代码 (/xxx) 和多余换行，取第一句话的核心文本
           const cleanText = content.trim().replace(/^\/[a-zA-Z0-9_-]+\s*/, '').replace(/[\r\n]+/g, ' ').trim();
           autoTitle = cleanText.slice(0, 24) || content.trim().slice(0, 24) || '新对话';
         }
 
+        const targetSkillCode = activeMainTab === 'agents' && selectedAgent ? selectedAgent.code : undefined;
         const created = await api.createConversation(
           autoTitle,
-          selectedModelId || undefined
+          selectedModelId || undefined,
+          targetSkillCode
         );
         actualConvId = created.id;
 
-        // 若原列表中已有该会话则替换，否则作为新会话插入在最前面（此时左侧正式展示该会话，且名字已改好）
+        // 若原列表中已有该会话则替换，否则作为新会话插入在最前面
         setConversations((prev) => {
           const hasExisting = prev.some((c) => c.id === convId);
           if (hasExisting) {
@@ -421,8 +561,14 @@ export default function App() {
           return [created, ...prev];
         });
 
-        setActiveConversationId(actualConvId);
-        navigate(`/chat/${actualConvId}`, { replace: true });
+        if (activeMainTab === 'agents' && selectedAgent) {
+          setAgentSessionIdBySkill((prev) => ({ ...prev, [selectedAgent.code]: actualConvId }));
+          navigate(`/agents/${selectedAgent.id}/${actualConvId}`, { replace: true });
+        } else {
+          setChatConversationId(actualConvId);
+          navigate(`/chat/${actualConvId}`, { replace: true });
+        }
+
         setMessagesByConv((prev) => {
           const draftMsgs = convId ? (prev[convId] || []) : [];
           const next = { ...prev };
@@ -465,10 +611,13 @@ export default function App() {
       },
     }));
 
+    const activeSkillCode = activeMainTab === 'agents' && selectedAgent ? selectedAgent.code : undefined;
+
     streamChat({
       conversationId: actualConvId,
       content,
       modelConfigId: selectedModelId || undefined,
+      skillCode: activeSkillCode,
       signal: abortController.signal,
       onThinkingChunk: (chunk: string) => {
         setStreamingSessions((prev) => {
@@ -780,8 +929,8 @@ export default function App() {
           conversations={conversations}
           activeConversationId={activeConversationId}
           onSelectConversation={(id) => {
-            setActiveConversationId(id);
-            navigateToTab('chat', id);
+            setChatConversationId(id);
+            navigate(`/chat/${id}`);
           }}
           onNewConversation={handleNewConversation}
           onDeleteConversation={handleDeleteConversation}
@@ -789,6 +938,22 @@ export default function App() {
           streamingConversationIds={Object.keys(streamingSessions).filter(
             (id) => streamingSessions[id]?.isStreaming
           )}
+          // Agents 相关
+          skills={skills}
+          selectedAgentId={selectedAgent?.id || null}
+          onSelectAgent={handleSelectAgent}
+          onNewAgentConversation={handleNewAgentConversation}
+          onSelectAgentConversation={handleSelectAgentConversation}
+          onCreateAgent={() => {
+            setEditingSkillForModal(null);
+            setSkillModalMode('add');
+            setIsSkillModalOpen(true);
+          }}
+          onEditAgent={(agent) => {
+            setEditingSkillForModal(agent);
+            setSkillModalMode('edit');
+            setIsSkillModalOpen(true);
+          }}
           // Plaza 相关
           plazaCategory={plazaCategory}
           onSelectPlazaCategory={(cat) => {
@@ -816,7 +981,7 @@ export default function App() {
 
       {/* 3. 主工作区 View (自适应 flex-1) */}
       <main className="flex-1 h-full min-w-0 overflow-hidden bg-slate-950">
-        {activeMainTab === 'chat' && (
+        {(activeMainTab === 'chat' || activeMainTab === 'agents') && (
           <ChatArea
             user={user}
             currentConversation={conversations.find((c) => c.id === activeConversationId) || null}
@@ -831,6 +996,12 @@ export default function App() {
             selectedModelId={selectedModelId}
             skills={skills}
             knowledgeBases={knowledgeBases}
+            activeAgent={activeMainTab === 'agents' ? selectedAgent : null}
+            onEditAgent={(agent) => {
+              setEditingSkillForModal(agent);
+              setSkillModalMode('edit');
+              setIsSkillModalOpen(true);
+            }}
             onSelectModel={(id) => setSelectedModelId(id)}
             onSendMessage={handleSendMessage}
             onStopStreaming={handleStopStreaming}
@@ -891,6 +1062,20 @@ export default function App() {
           />
         )}
       </main>
+
+      {/* 智能体/技能配置与创建模态框 */}
+      <SkillModal
+        isOpen={isSkillModalOpen}
+        onClose={() => {
+          setIsSkillModalOpen(false);
+          setEditingSkillForModal(null);
+          setSkillModalMode('none');
+        }}
+        skills={skills}
+        onRefresh={() => api.listSkills().then(setSkills)}
+        initialSkill={editingSkillForModal}
+        initialMode={skillModalMode}
+      />
     </div>
   );
 }

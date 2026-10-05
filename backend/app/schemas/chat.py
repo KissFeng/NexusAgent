@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 class ConversationCreateRequest(BaseModel):
     title: str = Field(default="新对话", max_length=255)
     model_config_id: str | None = None
+    skill_code: str | None = None
 
 class ConversationUpdateRequest(BaseModel):
     title: str | None = Field(default=None, max_length=255)
@@ -35,6 +36,7 @@ class ConversationResponse(BaseModel):
     workspace_id: str
     user_id: str
     model_config_id: str | None = None
+    skill_code: str | None = None
     title: str
     created_at: datetime
     updated_at: datetime

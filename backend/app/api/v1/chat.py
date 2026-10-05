@@ -75,16 +75,22 @@ async def list_conversations(
     user: Annotated[User, Depends(get_current_user)],
     ws_info: Annotated[tuple[Workspace, str], Depends(get_current_workspace)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    skill_code: Optional[str] = None,
 ):
     workspace, _ = ws_info
-    stmt = (
+    query = (
         select(Conversation)
         .where(
             Conversation.workspace_id == workspace.id,
             Conversation.user_id == user.id,
         )
-        .order_by(desc(Conversation.updated_at))
     )
+    if skill_code == "__general__":
+        query = query.where(Conversation.skill_code.is_(None))
+    elif skill_code:
+        query = query.where(Conversation.skill_code == skill_code)
+
+    stmt = query.order_by(desc(Conversation.updated_at))
     result = await db.execute(stmt)
     conversations = result.scalars().all()
 
@@ -103,6 +109,7 @@ async def list_conversations(
                 workspace_id=conv.workspace_id,
                 user_id=conv.user_id,
                 model_config_id=conv.model_config_id,
+                skill_code=conv.skill_code,
                 title=conv.title,
                 created_at=conv.created_at,
                 updated_at=conv.updated_at,
@@ -124,6 +131,7 @@ async def create_conversation(
         user_id=user.id,
         title=req.title,
         model_config_id=req.model_config_id,
+        skill_code=req.skill_code,
     )
     db.add(conv)
     await db.commit()
@@ -370,6 +378,11 @@ async def chat_stream(
     await UsageService.check_quota(workspace.id, db)
     stream_start_time = time.time()
 
+    # 提取用户 Slash 技能指令或入参传入的技能
+    slash_skill, pure_content = SkillService.parse_slash_skill(req.content)
+    active_skill_code = req.skill_code or slash_skill
+    effective_content = pure_content if slash_skill else req.content
+
     # 1. 查找或创建会话
     conversation_id = req.conversation_id
     if conversation_id:
@@ -381,13 +394,17 @@ async def chat_stream(
         conv = (await db.execute(conv_stmt)).scalar_one_or_none()
         if not conv:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="会话不存在")
+        if active_skill_code and not conv.skill_code:
+            conv.skill_code = active_skill_code
+            await db.flush()
     else:
-        title = req.content[:20].strip() or "新对话"
+        title = f"[{active_skill_code}] {pure_content[:18].strip() or '任务'}" if active_skill_code else (req.content[:20].strip() or "新对话")
         conv = Conversation(
             workspace_id=workspace.id,
             user_id=user.id,
             title=title,
             model_config_id=req.model_config_id,
+            skill_code=active_skill_code,
         )
         db.add(conv)
         await db.flush()
@@ -420,11 +437,6 @@ async def chat_stream(
             .order_by(ModelConfig.is_default.desc(), ModelConfig.created_at.asc())
         )
         model_config = (await db.execute(m_stmt)).scalars().first()
-
-    # 提取用户 Slash 技能指令或入参传入的技能
-    slash_skill, pure_content = SkillService.parse_slash_skill(req.content)
-    active_skill_code = req.skill_code or slash_skill
-    effective_content = pure_content if slash_skill else req.content
 
     async def event_generator():
         start_payload = {

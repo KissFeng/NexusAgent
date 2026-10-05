@@ -141,11 +141,18 @@ export const api = {
     }),
 
   // Conversations
-  listConversations: () => request<Conversation[]>('/conversations'),
-  createConversation: (title?: string, modelConfigId?: string) =>
+  listConversations: (skillCode?: string) =>
+    request<Conversation[]>(
+      skillCode ? `/conversations?skill_code=${encodeURIComponent(skillCode)}` : '/conversations'
+    ),
+  createConversation: (title?: string, modelConfigId?: string, skillCode?: string) =>
     request<Conversation>('/conversations', {
       method: 'POST',
-      body: JSON.stringify({ title: title || '新对话', model_config_id: modelConfigId }),
+      body: JSON.stringify({
+        title: title || '新对话',
+        model_config_id: modelConfigId,
+        skill_code: skillCode,
+      }),
     }),
   getMessages: (conversationId: string) =>
     request<Message[]>(`/conversations/${conversationId}/messages`),

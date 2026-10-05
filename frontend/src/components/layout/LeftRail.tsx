@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   MessageSquare,
+  Bot,
   Compass,
   BookOpen,
   Brain,
@@ -10,7 +11,7 @@ import {
 } from 'lucide-react';
 import type { User, Workspace } from '../../types';
 
-export type MainNavTab = 'chat' | 'plaza' | 'knowledge' | 'memory' | 'settings';
+export type MainNavTab = 'chat' | 'agents' | 'plaza' | 'knowledge' | 'memory' | 'settings';
 
 interface LeftRailProps {
   user: User;
@@ -42,6 +43,11 @@ export const LeftRail: React.FC<LeftRailProps> = ({
       label: '对话',
       icon: MessageSquare,
       badge: streamingCount > 0 ? streamingCount : undefined,
+    },
+    {
+      id: 'agents' as MainNavTab,
+      label: '智能体',
+      icon: Bot,
     },
     {
       id: 'plaza' as MainNavTab,

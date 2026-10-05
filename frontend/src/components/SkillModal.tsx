@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { api } from '../api/client';
 import type { Skill } from '../types';
 import {
@@ -20,6 +20,8 @@ interface SkillModalProps {
   onClose: () => void;
   skills: Skill[];
   onRefresh: () => void;
+  initialSkill?: Skill | null;
+  initialMode?: 'none' | 'add' | 'edit';
 }
 
 const CATEGORY_OPTIONS = ['内容创作', '研发提效', '业务分析', '办公辅助', '自定义'];
@@ -35,6 +37,8 @@ export const SkillModal: React.FC<SkillModalProps> = ({
   onClose,
   skills,
   onRefresh,
+  initialSkill,
+  initialMode,
 }) => {
   const [formMode, setFormMode] = useState<'none' | 'add' | 'edit'>('none');
   const [editingSkill, setEditingSkill] = useState<Skill | null>(null);
@@ -50,8 +54,6 @@ export const SkillModal: React.FC<SkillModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successTip, setSuccessTip] = useState<string | null>(null);
-
-  if (!isOpen) return null;
 
   const showNotification = (msg: string) => {
     setSuccessTip(msg);
@@ -86,6 +88,18 @@ export const SkillModal: React.FC<SkillModalProps> = ({
     setError(null);
     setFormMode('edit');
   };
+
+  useEffect(() => {
+    if (isOpen) {
+      if (initialSkill) {
+        handleOpenEdit(initialSkill);
+      } else if (initialMode === 'add') {
+        handleOpenAdd();
+      } else {
+        resetForm();
+      }
+    }
+  }, [isOpen, initialSkill, initialMode]);
 
   const handleToggleTool = (toolKey: string) => {
     setBoundTools((prev) =>
@@ -154,6 +168,8 @@ export const SkillModal: React.FC<SkillModalProps> = ({
       setLoading(false);
     }
   };
+
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fade-in">

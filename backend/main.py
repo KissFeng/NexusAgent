@@ -23,6 +23,7 @@ async def lifespan(app: FastAPI):
     # 启动时自动初始化数据表并安全扩充列
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS skill_code VARCHAR(100);"))
         await conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS model_name VARCHAR(255);"))
         await conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS tool_calls TEXT;"))
         await conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS citations TEXT;"))

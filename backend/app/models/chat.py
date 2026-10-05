@@ -11,6 +11,7 @@ class Conversation(Base):
     workspace_id: Mapped[str] = mapped_column(String(36), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     model_config_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("model_configs.id", ondelete="SET NULL"), nullable=True)
+    skill_code: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(255), default="新对话")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(
