@@ -24,6 +24,8 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS model_name VARCHAR(255);"))
+        await conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS tool_calls TEXT;"))
+        await conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS citations TEXT;"))
 
     # 启动定时任务引擎并恢复已有任务
     SchedulerService.start_scheduler()

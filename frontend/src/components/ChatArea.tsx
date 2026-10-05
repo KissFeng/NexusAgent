@@ -28,12 +28,10 @@ import {
   Zap,
   Wrench,
   Terminal,
-  Brain,
   Search,
   Cpu,
   Copy,
   Check,
-  RefreshCw,
   ArrowUp,
   Paperclip,
   Globe,
@@ -79,7 +77,7 @@ interface ChatAreaProps {
   onForkAtMessage?: (messageId: string) => void;
 }
 
-// ─── 思考过程组件 (Reasoning / Thinking) ───────────────────────────────────
+// ─── 思考过程组件 (Reasoning / Thinking) - 图一 ClaudeCode 极轻量工程风 ──────
 interface ReasoningBlockProps {
   thinking: string;
   isStreaming?: boolean;
@@ -89,16 +87,10 @@ interface ReasoningBlockProps {
 export const ReasoningBlock: React.FC<ReasoningBlockProps> = ({
   thinking,
   isStreaming = false,
-  defaultOpen,
+  defaultOpen = false,
 }) => {
-  const [isOpen, setIsOpen] = useState(defaultOpen ?? isStreaming);
+  const [isOpen, setIsOpen] = useState(defaultOpen);
   const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    if (isStreaming) {
-      setIsOpen(true);
-    }
-  }, [isStreaming]);
 
   if (!thinking && !isStreaming) return null;
 
@@ -110,53 +102,52 @@ export const ReasoningBlock: React.FC<ReasoningBlockProps> = ({
   };
 
   return (
-    <div className="my-2 select-none overflow-hidden rounded-xl border border-purple-900/40 bg-purple-950/20 shadow-sm">
-      {/* 头部触发条 */}
+    <div className="my-1.5 select-none overflow-hidden rounded-lg border border-slate-800/80 bg-slate-900/35 hover:bg-slate-900/55 transition-colors">
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="flex w-full items-center justify-between px-3.5 py-2 text-left transition-colors hover:bg-purple-900/20 cursor-pointer"
+        className="flex w-full items-center justify-between px-2.5 py-1 text-left text-xs text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
       >
-        <div className="flex items-center gap-2">
-          <Brain className="w-4 h-4 text-purple-400 shrink-0" />
+        <div className="flex items-center gap-1.5 min-w-0">
+          <ChevronRight
+            className={`w-3 h-3 text-slate-500 shrink-0 transition-transform duration-150 ${
+              isOpen ? 'rotate-90' : ''
+            }`}
+          />
+          <Sparkles className="w-3.5 h-3.5 text-indigo-400/90 shrink-0" />
+          <span className="font-medium text-slate-300">思考过程</span>
           {isStreaming ? (
-            <span className="flex items-center gap-1.5 text-xs font-medium text-purple-300 animate-pulse font-mono">
-              <Sparkles className="w-3 h-3 text-purple-400 animate-spin" />
-              正在深度思考中...
+            <span className="inline-flex items-center gap-1 text-[11px] text-indigo-400 font-mono">
+              <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-ping" />
+              正在深度思考...
             </span>
           ) : (
-            <span className="text-xs font-medium text-purple-300 font-mono">
-              深度推演过程
-            </span>
+            thinking && (
+              <span className="text-[11px] text-slate-500 font-mono">
+                ({thinking.trim().length} 字符)
+              </span>
+            )
           )}
-          <span className="text-[11px] text-purple-400/60 font-mono">
-            {thinking ? `(${thinking.trim().length} 字符)` : ''}
-          </span>
         </div>
-        <div className="flex items-center gap-2">
+
+        <div className="flex items-center gap-2 shrink-0">
           {isOpen && thinking && (
             <button
               type="button"
               onClick={handleCopy}
-              className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] text-purple-300 hover:text-white hover:bg-purple-800/40 transition-colors cursor-pointer"
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
               title="复制思考过程"
             >
               {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
               <span>{copied ? '已复制' : '复制'}</span>
             </button>
           )}
-          <ChevronDown
-            className={`w-3.5 h-3.5 text-purple-400/70 transition-transform duration-200 ${
-              isOpen ? 'rotate-180' : ''
-            }`}
-          />
         </div>
       </button>
 
-      {/* 展开的思考正文 */}
       {isOpen && (
-        <div className="border-t border-purple-900/40 px-3.5 py-3 border-l-2 border-l-purple-500/80 bg-purple-950/30">
-          <div className="font-mono text-xs text-purple-200/90 leading-relaxed whitespace-pre-wrap break-words select-text max-h-72 overflow-y-auto pr-1">
+        <div className="border-t border-slate-800/80 px-3 py-2 border-l-2 border-l-indigo-500/50 bg-slate-950/40">
+          <div className="font-mono text-xs text-slate-300/90 leading-relaxed whitespace-pre-wrap break-words select-text max-h-64 overflow-y-auto">
             {thinking || (isStreaming ? '正在组织思考架构与推演步骤...' : '')}
           </div>
         </div>
@@ -165,7 +156,7 @@ export const ReasoningBlock: React.FC<ReasoningBlockProps> = ({
   );
 };
 
-// ─── 工具调用卡片组件 (Collapsible Tool Call) ──────────────────────────────
+// ─── 工具调用单行折叠组件 (参考 ClaudeCodeUI ToolRenderer / CollapsibleSection) ─
 interface ToolCallBlockProps {
   tool: ToolCallEvent;
   defaultOpen?: boolean;
@@ -173,163 +164,260 @@ interface ToolCallBlockProps {
 
 const TOOL_CONFIG: Record<
   string,
-  { label: string; icon: React.ReactNode; border: string; bg: string; text: string }
+  { label: string; icon: React.ReactNode; border: string; accentText: string }
 > = {
   search_knowledge_base: {
-    label: '企业知识库检索',
-    icon: <BookOpen className="w-3.5 h-3.5 text-indigo-400" />,
+    label: 'KnowledgeBase',
+    icon: <BookOpen className="w-3 h-3 text-indigo-400" />,
     border: 'border-l-indigo-500',
-    bg: 'bg-indigo-950/25',
-    text: 'text-indigo-300',
+    accentText: 'text-indigo-400',
   },
   web_search: {
-    label: '实时联网搜索',
-    icon: <Search className="w-3.5 h-3.5 text-sky-400" />,
+    label: 'WebSearch',
+    icon: <Search className="w-3 h-3 text-sky-400" />,
     border: 'border-l-sky-500',
-    bg: 'bg-sky-950/25',
-    text: 'text-sky-300',
+    accentText: 'text-sky-400',
   },
   code_interpreter: {
-    label: 'Python 代码执行沙箱',
-    icon: <Terminal className="w-3.5 h-3.5 text-emerald-400" />,
+    label: 'CodeInterpreter',
+    icon: <Terminal className="w-3 h-3 text-emerald-400" />,
     border: 'border-l-emerald-500',
-    bg: 'bg-emerald-950/25',
-    text: 'text-emerald-300',
+    accentText: 'text-emerald-400',
   },
   call_mcp_tool: {
-    label: 'MCP 扩展工具协议',
-    icon: <Cpu className="w-3.5 h-3.5 text-teal-400" />,
+    label: 'MCP',
+    icon: <Cpu className="w-3 h-3 text-teal-400" />,
     border: 'border-l-teal-500',
-    bg: 'bg-teal-950/25',
-    text: 'text-teal-300',
+    accentText: 'text-teal-400',
   },
   delegate_subtask: {
-    label: '子智能体任务委派',
-    icon: <Layers className="w-3.5 h-3.5 text-purple-400" />,
+    label: 'Subagent',
+    icon: <Layers className="w-3 h-3 text-purple-400" />,
     border: 'border-l-purple-500',
-    bg: 'bg-purple-950/25',
-    text: 'text-purple-300',
+    accentText: 'text-purple-400',
   },
   execute_sensitive_action: {
-    label: '高危敏感操作审批决策',
-    icon: <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />,
+    label: 'Approval',
+    icon: <ShieldAlert className="w-3 h-3 text-amber-400" />,
     border: 'border-l-amber-500',
-    bg: 'bg-amber-950/25',
-    text: 'text-amber-300',
+    accentText: 'text-amber-400',
   },
 };
 
 export const ToolCallBlock: React.FC<ToolCallBlockProps> = ({ tool, defaultOpen = false }) => {
-  const [isOpen, setIsOpen] = useState(defaultOpen || tool.status === 'running');
+  const isError = tool.status === 'error';
+  const [isOpen, setIsOpen] = useState(defaultOpen || isError);
   const [copied, setCopied] = useState(false);
 
   const cfg = TOOL_CONFIG[tool.tool_name] || {
     label: tool.tool_name,
-    icon: <Wrench className="w-3.5 h-3.5 text-slate-400" />,
-    border: 'border-l-slate-500',
-    bg: 'bg-slate-900/40',
-    text: 'text-slate-300',
+    icon: <Wrench className="w-3 h-3 text-slate-400" />,
+    border: isError ? 'border-l-rose-500' : 'border-l-slate-600',
+    accentText: 'text-slate-300',
   };
 
-  const getArgsPreview = (): string => {
-    if (!tool.args) return '';
-    if (tool.args.query) return `query: "${tool.args.query}"`;
-    if (tool.args.code) return `code: "${tool.args.code.slice(0, 30)}..."`;
-    if (tool.args.instruction) return `instruction: "${tool.args.instruction.slice(0, 30)}..."`;
-    if (tool.args.tool_name) return `tool: ${tool.args.tool_name}`;
+  // 提取人性化单行参数摘要 (对齐 ClaudeCodeUI OneLineDisplay)
+  const getArgsSummary = (): string => {
+    if (!tool.args) return 'Parameters';
+    if (tool.args.query) return `"${tool.args.query}"`;
+    if (tool.args.code) {
+      const codeFirst = tool.args.code.trim().split('\n')[0];
+      return codeFirst.length > 45 ? `${codeFirst.slice(0, 45)}...` : codeFirst;
+    }
+    if (tool.args.tool_name) return `${tool.args.tool_name}`;
+    if (tool.args.url) return `${tool.args.url}`;
+    if (tool.args.instruction) {
+      return tool.args.instruction.length > 40
+        ? `"${tool.args.instruction.slice(0, 40)}..."`
+        : `"${tool.args.instruction}"`;
+    }
     try {
       const s = JSON.stringify(tool.args);
-      return s.length > 40 ? s.slice(0, 40) + '...' : s;
+      return s.length > 45 ? s.slice(0, 45) + '...' : s;
     } catch {
-      return '';
+      return 'Parameters';
     }
   };
 
-  const preview = getArgsPreview();
+  const summary = getArgsSummary();
 
-  const handleCopy = () => {
-    const textToCopy = `[Tool]: ${tool.tool_name}\n[Args]: ${JSON.stringify(tool.args, null, 2)}\n[Result]:\n${tool.content || ''}`;
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const textToCopy = tool.content || JSON.stringify(tool.args, null, 2);
     navigator.clipboard.writeText(textToCopy);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const isTerminal = tool.tool_name === 'code_interpreter';
+
   return (
-    <div className={`my-2 rounded-xl border border-slate-800/80 ${cfg.bg} border-l-2 ${cfg.border} overflow-hidden shadow-sm`}>
-      {/* 头部摘要栏 */}
+    <div className={`my-1 select-none overflow-hidden rounded-lg border border-slate-800/80 bg-slate-900/35 border-l-2 ${isError ? 'border-l-rose-500' : cfg.border} transition-all`}>
+      {/* 极简单行折叠头部 (对齐 ClaudeCodeUI 图一) */}
       <button
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="flex w-full items-center justify-between px-3.5 py-2 text-left transition-colors hover:bg-slate-850 cursor-pointer"
+        className="flex w-full items-center justify-between px-2.5 py-1 text-left text-xs transition-colors hover:bg-slate-850/60 cursor-pointer"
       >
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="flex items-center gap-1.5 min-w-0 flex-1">
           <ChevronRight
-            className={`w-3.5 h-3.5 text-slate-500 shrink-0 transition-transform duration-200 ${
+            className={`w-3 h-3 text-slate-500 shrink-0 transition-transform duration-150 ${
               isOpen ? 'rotate-90' : ''
             }`}
           />
           <span className="shrink-0">{cfg.icon}</span>
-          <span className={`text-xs font-semibold ${cfg.text} shrink-0`}>{cfg.label}</span>
-          {preview && (
-            <>
-              <span className="text-[10px] text-slate-600">/</span>
-              <span className="text-xs font-mono text-slate-400 truncate max-w-xs">{preview}</span>
-            </>
-          )}
+          <span className={`font-medium ${cfg.accentText} shrink-0`}>{cfg.label}</span>
+          <span className="text-[10px] text-slate-600 shrink-0">/</span>
+          <span className="truncate font-mono text-[11px] text-slate-400 max-w-md">
+            {summary}
+          </span>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        {/* 右侧微型状态标 (对齐图一) */}
+        <div className="flex items-center gap-1.5 shrink-0 ml-2">
           {tool.status === 'running' ? (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/20 text-[10px] font-mono animate-pulse">
-              <RefreshCw className="w-2.5 h-2.5 animate-spin" />
-              执行中
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/20 text-[10px] font-mono animate-pulse">
+              <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping" />
+              Running
             </span>
           ) : tool.status === 'completed' ? (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-mono">
-              <CheckCircle className="w-2.5 h-2.5" />
-              已完成
+            <span className="inline-flex items-center gap-1 text-[10px] font-mono text-emerald-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
             </span>
           ) : (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20 text-[10px] font-mono">
-              <XCircle className="w-2.5 h-2.5" />
-              异常
+            <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-mono font-medium text-rose-400 bg-rose-500/15 border border-rose-500/40">
+              Error
             </span>
           )}
         </div>
       </button>
 
-      {/* 展开的入参与执行结果 */}
+      {/* 点击展开抽屉 */}
       {isOpen && (
-        <div className="border-t border-slate-800/80 p-3 space-y-2.5 text-xs bg-slate-950/60">
-          {tool.args && Object.keys(tool.args).length > 0 && (
-            <div className="space-y-1">
-              <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400">
-                <span>输入参数 (Parameters)</span>
+        <div className="border-t border-slate-800/80 p-2.5 space-y-2 text-xs bg-slate-950/50">
+          {/* 异常提示栏 (图一风格) */}
+          {isError && tool.content && (
+            <div className="rounded border border-rose-500/30 bg-rose-950/20 px-2.5 py-1.5 text-xs text-rose-300 font-mono flex items-start gap-1.5 leading-relaxed">
+              <XCircle className="w-3.5 h-3.5 text-rose-400 shrink-0 mt-0.5" />
+              <div className="flex-1 break-all">
+                <span className="font-semibold text-rose-400">错误：</span>
+                {tool.content}
               </div>
-              <pre className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 font-mono text-[11px] text-slate-300 overflow-x-auto whitespace-pre-wrap">
-                {JSON.stringify(tool.args, null, 2)}
+            </div>
+          )}
+
+          {/* 终端风格代码执行结果 (如果为 code_interpreter) */}
+          {isTerminal && tool.args?.code && (
+            <div className="rounded bg-slate-950 border border-slate-800/80 p-2 font-mono text-[11px]">
+              <div className="text-slate-500 flex items-center gap-1 mb-1">
+                <span className="text-emerald-400 font-bold">$</span> python3
+              </div>
+              <pre className="text-slate-300 overflow-x-auto whitespace-pre-wrap max-h-48 leading-relaxed">
+                {tool.args.code}
               </pre>
             </div>
           )}
 
-          {tool.content && (
+          {/* 普通结果产出 */}
+          {!isError && tool.content && (
             <div className="space-y-1">
-              <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400">
-                <span>执行产出 (Output Result)</span>
+              <div className="flex items-center justify-between text-[10px] font-medium text-slate-400">
+                <span>执行结果</span>
                 <button
                   type="button"
                   onClick={handleCopy}
-                  className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
+                  className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
                 >
                   {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                  <span>{copied ? '已复制' : '复制结果'}</span>
+                  <span>{copied ? '已复制' : '复制'}</span>
                 </button>
               </div>
-              <pre className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 font-mono text-[11px] text-slate-300 overflow-x-auto max-h-60 whitespace-pre-wrap leading-relaxed select-text">
+              <pre className="p-2 rounded bg-slate-900/80 border border-slate-800/80 font-mono text-[11px] text-slate-300 overflow-x-auto max-h-52 whitespace-pre-wrap leading-relaxed select-text">
                 {tool.content}
               </pre>
             </div>
           )}
+
+          {/* raw params 二级微型折叠 (满足工程查看需求，平时不占视线) */}
+          {tool.args && Object.keys(tool.args).length > 0 && (
+            <details className="group/details mt-1 pt-1 border-t border-slate-800/60">
+              <summary className="text-[10px] font-mono text-slate-500 hover:text-slate-400 cursor-pointer list-none flex items-center gap-1 py-0.5">
+                <ChevronRight className="w-2.5 h-2.5 transition-transform group-open/details:rotate-90" />
+                <span>raw params</span>
+              </summary>
+              <pre className="mt-1 p-2 rounded bg-slate-950 border border-slate-800/80 font-mono text-[10px] text-slate-400 overflow-x-auto whitespace-pre-wrap">
+                {JSON.stringify(tool.args, null, 2)}
+              </pre>
+            </details>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ─── 知识库检索溯源卡片组件 (融入图一工具流风格) ──────────────────────────
+export const CitationsBlock: React.FC<{ citations: Citation[] }> = ({ citations }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
+
+  if (!citations || citations.length === 0) return null;
+
+  return (
+    <div className="my-1 select-none overflow-hidden rounded-lg border border-slate-800/80 bg-slate-900/35 border-l-2 border-l-indigo-500 transition-all">
+      <button
+        type="button"
+        onClick={() => setIsOpen(!isOpen)}
+        className="flex w-full items-center justify-between px-2.5 py-1 text-left text-xs transition-colors hover:bg-slate-850/60 cursor-pointer"
+      >
+        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+          <ChevronRight
+            className={`w-3 h-3 text-slate-500 shrink-0 transition-transform duration-150 ${
+              isOpen ? 'rotate-90' : ''
+            }`}
+          />
+          <BookOpen className="w-3 h-3 text-indigo-400 shrink-0" />
+          <span className="font-medium text-indigo-400 shrink-0">KnowledgeBase</span>
+          <span className="text-[10px] text-slate-600 shrink-0">/</span>
+          <span className="truncate font-mono text-[11px] text-slate-400">
+            命中 {citations.length} 篇参考知识库片段
+          </span>
+        </div>
+
+        <span className="text-[10px] font-mono text-indigo-400/85 px-1.5 py-0.2 rounded bg-indigo-500/10 border border-indigo-500/20">
+          {citations.length} citations
+        </span>
+      </button>
+
+      {isOpen && (
+        <div className="border-t border-slate-800/80 p-2 space-y-1.5 text-xs bg-slate-950/50">
+          {citations.map((c, idx) => (
+            <div key={c.point_id || idx} className="rounded border border-slate-800/80 bg-slate-900/60 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setExpandedIndex(expandedIndex === idx ? null : idx)}
+                className="flex w-full items-center justify-between px-2.5 py-1.5 text-left text-[11px] hover:bg-slate-800/40 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center gap-1.5 truncate">
+                  <span className="font-semibold text-indigo-400 shrink-0">[{c.source_index || idx + 1}]</span>
+                  <span className="text-slate-200 truncate">{c.filename}</span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0 text-[10px] font-mono text-emerald-400">
+                  <span>匹配: {c.score <= 1 ? `${(c.score * 100).toFixed(1)}%` : c.score}</span>
+                  <ChevronRight
+                    className={`w-2.5 h-2.5 text-slate-500 transition-transform ${
+                      expandedIndex === idx ? 'rotate-90' : ''
+                    }`}
+                  />
+                </div>
+              </button>
+              {expandedIndex === idx && (
+                <div className="border-t border-slate-800/80 p-2.5 text-[11px] text-slate-300 whitespace-pre-wrap leading-relaxed select-text bg-slate-950/60 font-mono">
+                  {c.content}
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -362,7 +450,7 @@ export const MarkdownCodeBlock: React.FC<{
   }
 
   return (
-    <div className="my-3 rounded-xl border border-slate-800 bg-slate-950 overflow-hidden shadow-lg group">
+    <div className="my-2.5 rounded-xl border border-slate-800 bg-slate-950 overflow-hidden shadow-lg group">
       <div className="flex items-center justify-between px-3.5 py-1.5 bg-slate-900 border-b border-slate-800 text-[11px] text-slate-400 font-mono">
         <span className="uppercase font-semibold text-indigo-400">{language || 'CODE'}</span>
         <button
@@ -374,13 +462,88 @@ export const MarkdownCodeBlock: React.FC<{
           <span>{copied ? '已复制' : '复制代码'}</span>
         </button>
       </div>
-      <pre className="p-3.5 overflow-x-auto font-mono text-xs text-slate-200 leading-relaxed">
+      <pre className="p-3 overflow-x-auto font-mono text-xs text-slate-200 leading-relaxed">
         <code className={className} {...props}>
           {children}
         </code>
       </pre>
     </div>
   );
+};
+
+// ─── 全套 Markdown 排版与表格美化组件 (彻底解决表格无框线、间距不均) ────────
+export const markdownComponents = {
+  code: MarkdownCodeBlock,
+  table: ({ children }: any) => (
+    <div className="my-3 w-full overflow-x-auto rounded-xl border border-slate-700/80 bg-slate-900/60 shadow-md">
+      <table className="min-w-full divide-y divide-slate-700/80 border-collapse text-left text-xs sm:text-sm text-slate-200">
+        {children}
+      </table>
+    </div>
+  ),
+  thead: ({ children }: any) => (
+    <thead className="bg-slate-800/90 text-slate-100 font-semibold border-b border-slate-700/80">
+      {children}
+    </thead>
+  ),
+  tbody: ({ children }: any) => (
+    <tbody className="divide-y divide-slate-800/80 bg-slate-900/30">
+      {children}
+    </tbody>
+  ),
+  tr: ({ children }: any) => (
+    <tr className="hover:bg-slate-800/50 transition-colors even:bg-slate-900/30">
+      {children}
+    </tr>
+  ),
+  th: ({ children }: any) => (
+    <th className="px-4 py-2.5 font-semibold text-slate-200 text-xs tracking-wider border-r border-slate-700/60 last:border-r-0 whitespace-nowrap">
+      {children}
+    </th>
+  ),
+  td: ({ children }: any) => (
+    <td className="px-4 py-2 text-xs sm:text-sm text-slate-300 border-r border-slate-800/60 last:border-r-0 leading-relaxed align-top">
+      {children}
+    </td>
+  ),
+  blockquote: ({ children }: any) => (
+    <blockquote className="border-l-2 border-indigo-500/60 pl-3.5 py-1 my-2 text-slate-300 bg-slate-900/40 rounded-r-lg text-xs sm:text-sm italic">
+      {children}
+    </blockquote>
+  ),
+  ul: ({ children }: any) => (
+    <ul className="list-disc list-inside space-y-1 my-1.5 text-slate-200 text-xs sm:text-sm">
+      {children}
+    </ul>
+  ),
+  ol: ({ children }: any) => (
+    <ol className="list-decimal list-inside space-y-1 my-1.5 text-slate-200 text-xs sm:text-sm">
+      {children}
+    </ol>
+  ),
+  li: ({ children }: any) => (
+    <li className="text-xs sm:text-sm leading-relaxed text-slate-200">
+      {children}
+    </li>
+  ),
+  hr: () => (
+    <hr className="my-3 border-slate-800" />
+  ),
+  p: ({ children }: any) => (
+    <p className="my-1.5 leading-relaxed text-slate-200 text-xs sm:text-sm">
+      {children}
+    </p>
+  ),
+  a: ({ href, children }: any) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2 transition-colors font-medium inline-flex items-center gap-0.5"
+    >
+      {children}
+    </a>
+  ),
 };
 
 // ─── 消息分段解析（提取 <think> 标签） ────────────────────────────────────────
@@ -467,7 +630,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [showKbPicker, setShowKbPicker] = useState(false);
   const [showMcpPopup, setShowMcpPopup] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
-  const [expandedCitationId, setExpandedCitationId] = useState<string | null>(null);
   const [selectedSkillIndex, setSelectedSkillIndex] = useState(0);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState<string>('');
@@ -1058,60 +1220,22 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       </div>
                     )}
 
+                    {/* 知识库溯源引用 (Assistant - 工具流前置展示) */}
+                    {msg.citations && msg.citations.length > 0 && (
+                      <CitationsBlock citations={msg.citations} />
+                    )}
+
                     {/* 消息正文文本 (Markdown 解答) */}
                     <div className="text-sm text-slate-200 leading-relaxed break-words font-normal">
                       <div className="prose prose-invert prose-sm max-w-none break-words">
                         <ReactMarkdown
                           remarkPlugins={[remarkGfm]}
-                          components={{
-                            code: MarkdownCodeBlock,
-                          }}
+                          components={markdownComponents}
                         >
                           {mainAnswer}
                         </ReactMarkdown>
                       </div>
                     </div>
-
-                    {/* 知识库溯源引用 (Assistant) */}
-                    {msg.citations && msg.citations.length > 0 && (
-                      <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
-                        <div className="text-[11px] font-semibold text-indigo-400 flex items-center gap-1 font-mono">
-                          <BookOpen className="w-3.5 h-3.5" />
-                          <span>检索溯源参考 ({msg.citations.length})</span>
-                        </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {msg.citations.map((c) => (
-                            <div key={c.point_id} className="w-full">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setExpandedCitationId(
-                                    expandedCitationId === c.point_id ? null : c.point_id
-                                  )
-                                }
-                                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 text-[11px] text-slate-300 transition-all cursor-pointer"
-                              >
-                                <ChevronRight
-                                  className={`w-3 h-3 text-slate-500 transition-transform ${
-                                    expandedCitationId === c.point_id ? 'rotate-90' : ''
-                                  }`}
-                                />
-                                <span className="font-semibold text-indigo-300">[{c.source_index}]</span>
-                                <span className="truncate max-w-xs">{c.filename}</span>
-                                <span className="text-[10px] text-emerald-400/90 font-mono">
-                                  匹配度: {c.score <= 1 ? `${(c.score * 100).toFixed(1)}%` : c.score}
-                                </span>
-                              </button>
-                              {expandedCitationId === c.point_id && (
-                                <div className="mt-1 p-2.5 rounded-lg bg-slate-950/80 border border-slate-800 text-[11px] text-slate-400 whitespace-pre-wrap leading-relaxed select-text">
-                                  {c.content}
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
 
                     {/* 第四行：Token 统计 (仅在 AI 消息保留展示) */}
                     <div className="pt-1 text-[11px] text-slate-500 font-mono select-none">
@@ -1202,14 +1326,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     </div>
                   )}
 
+                  {/* 实时知识库引用 (前置展示) */}
+                  {streamingCitations && streamingCitations.length > 0 && (
+                    <CitationsBlock citations={streamingCitations} />
+                  )}
+
                   {/* 打字机正文渲染 */}
                   {currentStreamingParsed.mainAnswer && (
                     <div className="prose prose-invert prose-sm max-w-none break-words text-slate-200">
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm]}
-                        components={{
-                          code: MarkdownCodeBlock,
-                        }}
+                        components={markdownComponents}
                       >
                         {currentStreamingParsed.mainAnswer}
                       </ReactMarkdown>
@@ -1218,26 +1345,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
                   {/* 打字光标 */}
                   <div className="inline-block w-2 h-4 bg-indigo-400 animate-pulse align-middle" />
-
-                  {/* 实时知识库引用 */}
-                  {streamingCitations.length > 0 && (
-                    <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
-                      <div className="text-[11px] font-semibold text-indigo-400 flex items-center gap-1 font-mono">
-                        <BookOpen className="w-3.5 h-3.5" />
-                        <span>检索溯源参考 ({streamingCitations.length})</span>
-                      </div>
-                      <div className="flex flex-wrap gap-1.5">
-                        {streamingCitations.map((c) => (
-                          <span
-                            key={c.point_id}
-                            className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[11px] text-slate-300 font-mono"
-                          >
-                            [{c.source_index}] {c.filename}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
                 </div>
               </div>
             </div>

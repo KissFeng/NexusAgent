@@ -23,6 +23,8 @@ class MessageResponse(BaseModel):
     content: str
     token_count: int
     model_name: str | None = None
+    tool_calls: list[dict] | None = None
+    citations: list[dict] | None = None
     created_at: datetime
 
     class Config:

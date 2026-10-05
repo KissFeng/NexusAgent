@@ -154,7 +154,35 @@ async def get_messages(
         .order_by(Message.created_at.asc())
     )
     messages = (await db.execute(msg_stmt)).scalars().all()
-    return [MessageResponse.model_validate(m) for m in messages]
+    res = []
+    for m in messages:
+        t_calls = None
+        if m.tool_calls:
+            try:
+                t_calls = json.loads(m.tool_calls) if isinstance(m.tool_calls, str) else m.tool_calls
+            except Exception:
+                t_calls = None
+        cits = None
+        if m.citations:
+            try:
+                cits = json.loads(m.citations) if isinstance(m.citations, str) else m.citations
+            except Exception:
+                cits = None
+
+        res.append(
+            MessageResponse(
+                id=m.id,
+                conversation_id=m.conversation_id,
+                role=m.role,
+                content=m.content,
+                token_count=m.token_count,
+                model_name=m.model_name,
+                tool_calls=t_calls,
+                citations=cits,
+                created_at=m.created_at,
+            )
+        )
+    return res
 
 @router.delete("/conversations/{conversation_id}")
 async def delete_conversation(
@@ -256,6 +284,8 @@ async def fork_conversation(
             content=m.content,
             model_name=m.model_name,
             token_count=m.token_count,
+            tool_calls=m.tool_calls,
+            citations=m.citations,
             created_at=m.created_at,
         )
         db.add(cloned_msg)
@@ -475,6 +505,8 @@ async def chat_stream(
         full_thinking = []
         emitted_citations = set()
         emitted_tool_calls = set()
+        collected_tool_calls: dict[str, dict] = {}
+        collected_citations: list[dict] = []
 
         try:
             # 流式监听图执行过程中的事件
@@ -505,6 +537,13 @@ async def chat_stream(
                             if hasattr(m, "tool_calls") and m.tool_calls:
                                 for tc in m.tool_calls:
                                     t_id = tc.get("id") or f"{tc.get('name')}-{len(emitted_tool_calls)}"
+                                    if t_id not in collected_tool_calls:
+                                        collected_tool_calls[t_id] = {
+                                            "tool_id": t_id,
+                                            "tool_name": tc.get("name"),
+                                            "args": tc.get("args", {}),
+                                            "status": "running",
+                                        }
                                     if t_id not in emitted_tool_calls:
                                         emitted_tool_calls.add(t_id)
                                         yield f"data: {json.dumps({'type': 'tool_call', 'tool_id': t_id, 'tool_name': tc.get('name'), 'args': tc.get('args', {}), 'status': 'running'}, ensure_ascii=False)}\n\n"
@@ -513,13 +552,25 @@ async def chat_stream(
                     if "tools" in payload:
                         tool_data = payload["tools"]
                         for tm in tool_data.get("messages", []):
-                            yield f"data: {json.dumps({'type': 'tool_result', 'tool_id': getattr(tm, 'tool_call_id', None), 'tool_name': getattr(tm, 'name', None), 'content': str(tm.content), 'status': 'completed'}, ensure_ascii=False)}\n\n"
+                            t_id = getattr(tm, 'tool_call_id', None)
+                            if t_id and t_id in collected_tool_calls:
+                                collected_tool_calls[t_id]["content"] = str(tm.content)
+                                collected_tool_calls[t_id]["status"] = "completed"
+                            elif t_id:
+                                collected_tool_calls[t_id] = {
+                                    "tool_id": t_id,
+                                    "tool_name": getattr(tm, "name", None),
+                                    "content": str(tm.content),
+                                    "status": "completed",
+                                }
+                            yield f"data: {json.dumps({'type': 'tool_result', 'tool_id': t_id, 'tool_name': getattr(tm, 'name', None), 'content': str(tm.content), 'status': 'completed'}, ensure_ascii=False)}\n\n"
 
                         citations = tool_data.get("citations", [])
                         for c in citations:
                             point_id = c.get("point_id")
                             if point_id not in emitted_citations:
                                 emitted_citations.add(point_id)
+                                collected_citations.append(c)
                                 yield f"data: {json.dumps({'type': 'citation', 'citation': c}, ensure_ascii=False)}\n\n"
 
             # 检查图是否触发了 interrupt 挂起（审批等待）
@@ -564,6 +615,8 @@ async def chat_stream(
                     role="assistant",
                     content=persisted_content,
                     model_name=model_config.name if model_config else None,
+                    tool_calls=json.dumps(list(collected_tool_calls.values()), ensure_ascii=False) if collected_tool_calls else None,
+                    citations=json.dumps(collected_citations, ensure_ascii=False) if collected_citations else None,
                 )
                 session.add(assistant_msg)
                 await session.commit()

@@ -33,6 +33,8 @@ class Message(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     token_count: Mapped[int] = mapped_column(Integer, default=0)
     model_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    tool_calls: Mapped[str | None] = mapped_column(Text, nullable=True)
+    citations: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
 
     conversation = relationship("Conversation", back_populates="messages")
