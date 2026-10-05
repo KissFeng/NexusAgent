@@ -35,6 +35,7 @@ import {
   ArrowUp,
   Paperclip,
   Globe,
+  Folder,
   AtSign,
   RotateCcw,
   SquarePen,
@@ -179,6 +180,24 @@ const TOOL_CONFIG: Record<
     border: 'border-l-sky-500',
     accentText: 'text-sky-400',
   },
+  fetch_web_page: {
+    label: 'WebReader',
+    icon: <Globe className="w-3 h-3 text-cyan-400" />,
+    border: 'border-l-cyan-500',
+    accentText: 'text-cyan-400',
+  },
+  bash_executor: {
+    label: 'Bash',
+    icon: <Terminal className="w-3 h-3 text-emerald-400" />,
+    border: 'border-l-emerald-500',
+    accentText: 'text-emerald-400',
+  },
+  file_system: {
+    label: 'FileSystem',
+    icon: <Folder className="w-3 h-3 text-amber-400" />,
+    border: 'border-l-amber-500',
+    accentText: 'text-amber-400',
+  },
   code_interpreter: {
     label: 'CodeInterpreter',
     icon: <Terminal className="w-3 h-3 text-emerald-400" />,
@@ -220,6 +239,13 @@ export const ToolCallBlock: React.FC<ToolCallBlockProps> = ({ tool, defaultOpen 
   // 提取人性化单行参数摘要 (对齐 ClaudeCodeUI OneLineDisplay)
   const getArgsSummary = (): string => {
     if (!tool.args) return 'Parameters';
+    if (tool.tool_name === 'bash_executor' || tool.args.command) {
+      const cmdFirst = (tool.args.command || '').trim().split('\n')[0];
+      return cmdFirst.length > 55 ? `$ ${cmdFirst.slice(0, 55)}...` : `$ ${cmdFirst}`;
+    }
+    if (tool.tool_name === 'file_system' || tool.args.action) {
+      return `${tool.args.action || 'op'} ${tool.args.path || ''}`;
+    }
     if (tool.args.query) return `"${tool.args.query}"`;
     if (tool.args.code) {
       const codeFirst = tool.args.code.trim().split('\n')[0];
@@ -877,10 +903,31 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     实时联网
                   </span>
                 )}
+                {activeAgent.bound_tools?.includes('fetch_web_page') && (
+                  <span className="flex items-center gap-1 text-[10px] text-cyan-300 px-2 py-0.5 rounded-md bg-cyan-950/40 border border-cyan-500/20">
+                    <Globe className="w-3 h-3 text-cyan-400" />
+                    网页深度阅读
+                  </span>
+                )}
                 {activeAgent.bound_tools?.includes('code_interpreter') && (
                   <span className="flex items-center gap-1 text-[10px] text-emerald-300 px-2 py-0.5 rounded-md bg-emerald-950/40 border border-emerald-500/20">
                     <Terminal className="w-3 h-3 text-emerald-400" />
                     Python沙箱
+                  </span>
+                )}
+                {activeAgent.bound_tools?.includes('bash_executor') && (
+                  <span className="flex items-center gap-1 text-[10px] text-emerald-300 px-2 py-0.5 rounded-md bg-emerald-950/40 border border-emerald-500/20">
+                    <Terminal className="w-3 h-3 text-emerald-400" />
+                    Bash沙箱
+                  </span>
+                )}
+                {currentConversation?.project_path && (
+                  <span
+                    className="flex items-center gap-1 text-[10px] text-amber-300 px-2 py-0.5 rounded-md bg-amber-950/40 border border-amber-500/20 cursor-help"
+                    title={`当前关联的项目执行目录: ${currentConversation.project_path}`}
+                  >
+                    <Folder className="w-3 h-3 text-amber-400" />
+                    {currentConversation.project_path.split('/').pop() || '关联工程'}
                   </span>
                 )}
               </div>

@@ -49,9 +49,10 @@ PRESET_SKILLS = [
             "2. 头部竞品横向对比（用 Markdown 表格对比产品定位、核心功能、定价策略、优劣势）；\n"
             "3. SWOT 深度拆解（优势、劣势、机会、威胁）；\n"
             "4. 战略落地建议（短中长期破局打法与潜在商业风险提示）。\n"
+            "进行大宗商品价格或行业行情调研时，若搜索摘要未含具体数字，务必调用 fetch_web_page 核实目标页面的具体报价、口径与规格。\n"
             "回答需数据详实、逻辑严密、结论先行。"
         ),
-        "bound_tools": ["web_search", "search_knowledge_base"],
+        "bound_tools": ["web_search", "fetch_web_page", "search_knowledge_base"],
     },
     {
         "name": "SQL 性能诊断与索引优化师",
@@ -75,15 +76,16 @@ class SkillService:
     @staticmethod
     async def ensure_preset_skills(db: AsyncSession, workspace_id: str):
         """
-        为工作区自动初始化预置技能（如果尚未存在）
+        为工作区自动初始化预置技能（如果尚未存在），并同步预置技能的必要核心工具
         """
         stmt = select(Skill).where(Skill.workspace_id == workspace_id)
         existing = (await db.execute(stmt)).scalars().all()
-        existing_codes = {s.code for s in existing}
+        existing_by_code = {s.code: s for s in existing}
 
-        added = False
+        modified = False
         for preset in PRESET_SKILLS:
-            if preset["code"] not in existing_codes:
+            code = preset["code"]
+            if code not in existing_by_code:
                 skill = Skill(
                     workspace_id=workspace_id,
                     name=preset["name"],
@@ -96,9 +98,22 @@ class SkillService:
                     is_preset=True,
                 )
                 db.add(skill)
-                added = True
+                modified = True
+            else:
+                existing_skill = existing_by_code[code]
+                if existing_skill.is_preset:
+                    try:
+                        cur_tools = json.loads(existing_skill.bound_tools) if isinstance(existing_skill.bound_tools, str) else (existing_skill.bound_tools or [])
+                    except Exception:
+                        cur_tools = []
+                    # 补全缺失的预设工具
+                    missing_tools = [t for t in preset["bound_tools"] if t not in cur_tools]
+                    if missing_tools:
+                        updated_tools = cur_tools + missing_tools
+                        existing_skill.bound_tools = json.dumps(updated_tools)
+                        modified = True
 
-        if added:
+        if modified:
             await db.commit()
 
     @staticmethod

@@ -27,8 +27,11 @@ interface SkillModalProps {
 const CATEGORY_OPTIONS = ['内容创作', '研发提效', '业务分析', '办公辅助', '自定义'];
 
 const AVAILABLE_TOOLS = [
-  { key: 'web_search', label: '实时联网搜索 (Web Search)', desc: 'DuckDuckGo 实时公开检索' },
-  { key: 'code_interpreter', label: 'Python 代码沙箱', desc: '受控隔离数学与脚本执行' },
+  { key: 'web_search', label: '实时联网搜索 (Web Search)', desc: '高质量中文与公开信息实时检索' },
+  { key: 'fetch_web_page', label: '网页深度阅读 (WebReader)', desc: '抓取目标网页正文与行情表格详情' },
+  { key: 'bash_executor', label: '通用 Bash/Python 沙箱', desc: '在关联项目工作区执行 Shell/Python 命令' },
+  { key: 'file_system', label: '工作区文件系统 (FileSystem)', desc: '查看项目目录、阅读与创建代码文件' },
+  { key: 'code_interpreter', label: '受控 Python 计算沙箱', desc: '受控隔离数学与轻量计算执行' },
   { key: 'search_knowledge_base', label: '企业知识库检索 (RAG)', desc: 'Qdrant 向量与关键词混合检索' },
 ];
 

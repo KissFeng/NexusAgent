@@ -33,6 +33,7 @@ export interface Conversation {
   user_id: string;
   model_config_id?: string;
   skill_code?: string | null;
+  project_path?: string | null;
   title: string;
   created_at: string;
   updated_at: string;

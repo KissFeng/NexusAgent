@@ -1,4 +1,5 @@
 import json
+import asyncio
 from typing import Annotated, Sequence, TypedDict, List, Dict, Any, Optional
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage, SystemMessage
 from langgraph.graph import StateGraph, START, END
@@ -43,13 +44,18 @@ class AgentState(TypedDict):
     citations: List[Dict[str, Any]]
     model_config_id: Optional[str]
     skill_code: Optional[str]
+    project_path: Optional[str]
+    tool_call_count: int
 
 
 def create_agent_graph(model_config: ModelConfig, workspace_id: str):
     """
     Constructs a LangGraph StateGraph equipped with:
     - RAG Hybrid Search tool
-    - Web Search (DuckDuckGo 联网检索)
+    - Web Search (联网检索)
+    - Fetch Web Page (网页深度正文与表格阅读器)
+    - Bash Executor (通用 Shell/Python 沙箱)
+    - File System (项目目录文件操作)
     - Code Interpreter (Python 代码沙箱)
     - Sensitive action with Human-in-the-Loop Interrupt
     - Skill 专家技能动态注入
@@ -91,6 +97,78 @@ def create_agent_graph(model_config: ModelConfig, workspace_id: str):
                         }
                     },
                     "required": ["query"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "fetch_web_page",
+                "description": "深入抓取并阅读目标网页的正文与数据表格。当 web_search 检索到关键网址，但摘要缺少具体数字、报价明细或深度内容时使用此工具。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "要抓取和深度阅读的目标网页完整 URL",
+                        }
+                    },
+                    "required": ["url"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "bash_executor",
+                "description": "在关联项目目录中执行 Shell/Bash 命令或运行 Python 脚本。支持代码搜索、运行测试、数据处理与动态爬虫脚本。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "要执行的 Shell/Bash 命令 (例如: python3 -c '...' 或 ls -la 或 git status)",
+                        },
+                        "cwd": {
+                            "type": "string",
+                            "description": "可选的命令执行工作目录绝对路径。默认使用当前绑定的项目目录。",
+                        },
+                    },
+                    "required": ["command"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "file_system",
+                "description": "在项目工作区进行文件与目录操作 (列出文件、阅读文件、创建/更新代码)。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["read", "write", "list"],
+                            "description": "操作类型: list (列出目录清单), read (阅读文件内容), write (写入文件)",
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "目标文件或目录的相对或绝对路径",
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "写入文件时的内容 (action=write 时必填)",
+                        },
+                        "start_line": {
+                            "type": "integer",
+                            "description": "读取文件时的起始行号 (可选，默认 1)",
+                        },
+                        "end_line": {
+                            "type": "integer",
+                            "description": "读取文件时的结束行号 (可选)",
+                        },
+                    },
+                    "required": ["action", "path"],
                 },
             },
         },
@@ -197,8 +275,8 @@ def create_agent_graph(model_config: ModelConfig, workspace_id: str):
         sys_prompt = (
             "你是一个企业级 AI 智能体助手。\n"
             "1. 当用户提出业务或内部知识问题时，请优先使用 search_knowledge_base 检索企业知识库，严格依据资料作答并在句末标注 [1]、[2] 引用；\n"
-            "2. 当需要获取实时资讯、外部最新数据或公共知识时，使用 web_search 联网检索；\n"
-            "3. 当需要精确数学计算、数据处理或运行脚本时，使用 code_interpreter 执行 Python 代码；\n"
+            "2. 当需要获取实时资讯、外部最新数据或公共知识时，使用 web_search 联网检索；当检索到相关网页链接但摘要缺乏详细数值、表格或具体报价时，主动使用 fetch_web_page 读取页面正文和表格数据；单次问答请精炼聚焦检索（控制在 1~3 次关键工具调用内），切忌拉网式无节制过度检索；对于宏观分析、评价性议题或常识梳理，优先依托自身知识库进行客观辩证阐述；\n"
+            "3. 当需要精确计算、执行 Python/Shell 脚本、网络抓取、探索本地项目文件或执行工程测试时，优先调用 bash_executor 或 file_system 工具在关联的项目工作目录中高效完成；\n"
             "4. 如果用户要求执行敏感管理动作，调用 execute_sensitive_action 工具触发审批；\n"
             "5. 当任务庞大、涉及深度调研、编写测试或安全评审时，主动调用 delegate_subtask 将子任务委派给专门的子智能体分工完成；\n"
             "6. 当需要使用空间配置的外部 MCP (Model Context Protocol) 协议服务时，调用 call_mcp_tool 远程执行工具；\n"
@@ -302,116 +380,177 @@ def create_agent_graph(model_config: ModelConfig, workspace_id: str):
         results = []
         new_citations = list(state.get("citations", []))
 
-        for tc in last_message.tool_calls:
+        async def run_single_tool(tc):
             tool_name = tc["name"]
             tool_args = tc["args"]
             tool_call_id = tc["id"]
+            citations = []
 
-            if tool_name == "search_knowledge_base":
-                query = tool_args.get("query", "")
-                async with AsyncSessionLocal() as session:
-                    chunks = await RetrievalService.hybrid_search(
-                        db=session,
-                        workspace_id=state["workspace_id"],
-                        query=query,
-                        kb_ids=state.get("kb_ids"),
-                        top_k=4,
+            try:
+                if tool_name == "search_knowledge_base":
+                    query = tool_args.get("query", "")
+                    async with AsyncSessionLocal() as session:
+                        chunks = await RetrievalService.hybrid_search(
+                            db=session,
+                            workspace_id=state["workspace_id"],
+                            query=query,
+                            kb_ids=state.get("kb_ids"),
+                            top_k=4,
+                            model_config=model_config,
+                        )
+
+                    if chunks:
+                        clean_chunks = sanitize_for_state(chunks)
+                        citations.extend(clean_chunks)
+                        context_lines = []
+                        for c in clean_chunks:
+                            context_lines.append(f"[{c['source_index']}] 来源文件: {c['filename']}\n内容: {c['content']}\n")
+                        content = "\n".join(context_lines)
+                    else:
+                        content = "知识库中未找到与此相关的参考内容。"
+
+                    return ToolMessage(tool_call_id=tool_call_id, content=content), citations
+
+                elif tool_name == "web_search":
+                    query = tool_args.get("query", "")
+                    content = await ToolExecutor.execute_web_search(query)
+                    return ToolMessage(tool_call_id=tool_call_id, content=content), []
+
+                elif tool_name == "fetch_web_page":
+                    url = tool_args.get("url", "")
+                    content = await ToolExecutor.execute_fetch_web_page(url)
+                    return ToolMessage(tool_call_id=tool_call_id, content=content), []
+
+                elif tool_name == "code_interpreter":
+                    code = tool_args.get("code", "")
+                    content = ToolExecutor.execute_python_code(code)
+                    return ToolMessage(tool_call_id=tool_call_id, content=content), []
+
+                elif tool_name == "bash_executor":
+                    cmd = tool_args.get("command", "")
+                    target_cwd = tool_args.get("cwd") or state.get("project_path")
+                    content = await ToolExecutor.execute_bash(cmd, cwd=target_cwd)
+                    return ToolMessage(tool_call_id=tool_call_id, content=content), []
+
+                elif tool_name == "file_system":
+                    action = tool_args.get("action", "list")
+                    path = tool_args.get("path", ".")
+                    content_arg = tool_args.get("content")
+                    start_l = tool_args.get("start_line")
+                    end_l = tool_args.get("end_line")
+                    target_cwd = state.get("project_path")
+                    content = ToolExecutor.execute_file_system(
+                        action=action,
+                        path=path,
+                        content=content_arg,
+                        start_line=start_l,
+                        end_line=end_l,
+                        cwd=target_cwd,
+                    )
+                    return ToolMessage(tool_call_id=tool_call_id, content=content), []
+
+                elif tool_name == "execute_sensitive_action":
+                    approval_payload = {
+                        "action_type": tool_args.get("action_type"),
+                        "target": tool_args.get("target"),
+                        "reason": tool_args.get("reason"),
+                        "tool_call_id": tool_call_id,
+                    }
+                    decision = interrupt(approval_payload)
+
+                    if isinstance(decision, dict) and decision.get("approved"):
+                        res_content = f"✅ 操作已获得人工审批通过并成功执行：[{tool_args.get('action_type')}] 目标: {tool_args.get('target')}"
+                    else:
+                        reason = decision.get("reason", "管理员拒绝了此操作") if isinstance(decision, dict) else "已驳回"
+                        res_content = f"❌ 操作已被人工驳回：{reason}"
+
+                    return ToolMessage(tool_call_id=tool_call_id, content=res_content), []
+
+                elif tool_name == "delegate_subtask":
+                    subagent_type = tool_args.get("subagent_type", "research")
+                    instruction = tool_args.get("instruction", "")
+                    context = tool_args.get("context", "")
+                    res_content = await SubagentService.run_delegated_task(
+                        subagent_type=subagent_type,
+                        instruction=instruction,
+                        context=context,
                         model_config=model_config,
                     )
+                    return ToolMessage(tool_call_id=tool_call_id, content=res_content), []
 
-                if chunks:
-                    clean_chunks = sanitize_for_state(chunks)
-                    new_citations.extend(clean_chunks)
-                    context_lines = []
-                    for c in clean_chunks:
-                        context_lines.append(f"[{c['source_index']}] 来源文件: {c['filename']}\n内容: {c['content']}\n")
-                    content = "\n".join(context_lines)
-                else:
-                    content = "知识库中未找到与此相关的参考内容。"
+                elif tool_name == "call_mcp_tool":
+                    server_url = tool_args.get("server_url", "")
+                    mcp_tool_name = tool_args.get("tool_name", "")
+                    arguments = tool_args.get("arguments", {})
 
-                results.append(ToolMessage(tool_call_id=tool_call_id, content=content))
+                    cfg_headers = None
+                    cfg_defaults = None
+                    cfg_protocol = "auto"
+                    async with AsyncSessionLocal() as session:
+                        stmt = select(ToolConfig).where(
+                            ToolConfig.workspace_id == state["workspace_id"],
+                            ToolConfig.tool_type == "mcp_server",
+                            ToolConfig.is_enabled == True,
+                        )
+                        mcp_cfgs = (await session.execute(stmt)).scalars().all()
+                        for mc in mcp_cfgs:
+                            try:
+                                c = json.loads(mc.config_json) if mc.config_json else {}
+                            except Exception:
+                                c = {}
+                            if c.get("server_url") == server_url or c.get("url") == server_url:
+                                cfg_headers = c.get("headers")
+                                cfg_defaults = c.get("default_params")
+                                cfg_protocol = c.get("protocol", "auto")
+                                break
 
-            elif tool_name == "web_search":
-                query = tool_args.get("query", "")
-                content = await ToolExecutor.execute_web_search(query)
-                results.append(ToolMessage(tool_call_id=tool_call_id, content=content))
-
-            elif tool_name == "code_interpreter":
-                code = tool_args.get("code", "")
-                content = ToolExecutor.execute_python_code(code)
-                results.append(ToolMessage(tool_call_id=tool_call_id, content=content))
-
-            elif tool_name == "execute_sensitive_action":
-                approval_payload = {
-                    "action_type": tool_args.get("action_type"),
-                    "target": tool_args.get("target"),
-                    "reason": tool_args.get("reason"),
-                    "tool_call_id": tool_call_id,
-                }
-                decision = interrupt(approval_payload)
-
-                if isinstance(decision, dict) and decision.get("approved"):
-                    res_content = f"✅ 操作已获得人工审批通过并成功执行：[{tool_args.get('action_type')}] 目标: {tool_args.get('target')}"
-                else:
-                    reason = decision.get("reason", "管理员拒绝了此操作") if isinstance(decision, dict) else "已驳回"
-                    res_content = f"❌ 操作已被人工驳回：{reason}"
-
-                results.append(ToolMessage(tool_call_id=tool_call_id, content=res_content))
-
-            elif tool_name == "delegate_subtask":
-                subagent_type = tool_args.get("subagent_type", "research")
-                instruction = tool_args.get("instruction", "")
-                context = tool_args.get("context", "")
-                res_content = await SubagentService.run_delegated_task(
-                    subagent_type=subagent_type,
-                    instruction=instruction,
-                    context=context,
-                    model_config=model_config,
-                )
-                results.append(ToolMessage(tool_call_id=tool_call_id, content=res_content))
-
-            elif tool_name == "call_mcp_tool":
-                server_url = tool_args.get("server_url", "")
-                mcp_tool_name = tool_args.get("tool_name", "")
-                arguments = tool_args.get("arguments", {})
-
-                cfg_headers = None
-                cfg_defaults = None
-                cfg_protocol = "auto"
-                async with AsyncSessionLocal() as session:
-                    stmt = select(ToolConfig).where(
-                        ToolConfig.workspace_id == state["workspace_id"],
-                        ToolConfig.tool_type == "mcp_server",
-                        ToolConfig.is_enabled == True,
+                    content = await ToolExecutor.execute_mcp_tool(
+                        server_url=server_url,
+                        tool_name=mcp_tool_name,
+                        arguments=arguments,
+                        headers=cfg_headers,
+                        default_params=cfg_defaults,
+                        protocol=cfg_protocol,
                     )
-                    mcp_cfgs = (await session.execute(stmt)).scalars().all()
-                    for mc in mcp_cfgs:
-                        try:
-                            c = json.loads(mc.config_json) if mc.config_json else {}
-                        except Exception:
-                            c = {}
-                        if c.get("server_url") == server_url or c.get("url") == server_url:
-                            cfg_headers = c.get("headers")
-                            cfg_defaults = c.get("default_params")
-                            cfg_protocol = c.get("protocol", "auto")
-                            break
+                    return ToolMessage(tool_call_id=tool_call_id, content=content), []
 
-                content = await ToolExecutor.execute_mcp_tool(
-                    server_url=server_url,
-                    tool_name=mcp_tool_name,
-                    arguments=arguments,
-                    headers=cfg_headers,
-                    default_params=cfg_defaults,
-                    protocol=cfg_protocol,
-                )
-                results.append(ToolMessage(tool_call_id=tool_call_id, content=content))
+                else:
+                    return ToolMessage(tool_call_id=tool_call_id, content=f"未知工具: {tool_name}"), []
 
-        return {"messages": results, "citations": sanitize_for_state(new_citations)}
+            except Exception as err:
+                return ToolMessage(tool_call_id=tool_call_id, content=f"工具执行异常: {str(err)}"), []
 
-    # 5. 条件路由
+        # 限制单批次并发工具调用上限 (最多 4 项)，防止过多请求导致网络拥塞或循环重试
+        tool_calls_to_run = last_message.tool_calls[:4]
+        tool_calls_skipped = last_message.tool_calls[4:]
+
+        executed_pairs = await asyncio.gather(*(run_single_tool(tc) for tc in tool_calls_to_run))
+        for t_msg, cits in executed_pairs:
+            results.append(t_msg)
+            if cits:
+                new_citations.extend(cits)
+
+        for skipped in tool_calls_skipped:
+            results.append(ToolMessage(
+                tool_call_id=skipped["id"],
+                content="[系统提醒] 已达单批次最大并发工具数上限，请基于已获取的检索结果先行总结作答。"
+            ))
+
+        new_total_calls = state.get("tool_call_count", 0) + len(tool_calls_to_run)
+        return {
+            "messages": results,
+            "citations": sanitize_for_state(new_citations),
+            "tool_call_count": new_total_calls,
+        }
+
+    # 5. 条件路由 (设置全局最大工具预算，防止过度调用)
     def should_continue(state: AgentState) -> str:
         last_message = state["messages"][-1]
+        tool_count = state.get("tool_call_count", 0)
+        # 全局最多允许累计调用 4 次工具，防止陷入死循环或无节制检索
         if isinstance(last_message, AIMessage) and last_message.tool_calls:
+            if tool_count >= 4:
+                return END
             return "tools"
         return END
 

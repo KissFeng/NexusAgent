@@ -5,10 +5,12 @@ class ConversationCreateRequest(BaseModel):
     title: str = Field(default="新对话", max_length=255)
     model_config_id: str | None = None
     skill_code: str | None = None
+    project_path: str | None = None
 
 class ConversationUpdateRequest(BaseModel):
     title: str | None = Field(default=None, max_length=255)
     model_config_id: str | None = None
+    project_path: str | None = None
 
 class ConversationForkRequest(BaseModel):
     message_id: str
@@ -37,6 +39,7 @@ class ConversationResponse(BaseModel):
     user_id: str
     model_config_id: str | None = None
     skill_code: str | None = None
+    project_path: str | None = None
     title: str
     created_at: datetime
     updated_at: datetime
@@ -50,3 +53,4 @@ class ChatStreamRequest(BaseModel):
     content: str = Field(min_length=1)
     model_config_id: str | None = None  # If None, use workspace default model
     skill_code: str | None = None  # 可选指定的 Skill 技能标识
+    project_path: str | None = None  # 关联的项目工作目录路径

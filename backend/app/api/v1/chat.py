@@ -1,4 +1,5 @@
 import json
+import os
 import asyncio
 import time
 import re
@@ -110,6 +111,7 @@ async def list_conversations(
                 user_id=conv.user_id,
                 model_config_id=conv.model_config_id,
                 skill_code=conv.skill_code,
+                project_path=conv.project_path,
                 title=conv.title,
                 created_at=conv.created_at,
                 updated_at=conv.updated_at,
@@ -132,6 +134,7 @@ async def create_conversation(
         title=req.title,
         model_config_id=req.model_config_id,
         skill_code=req.skill_code,
+        project_path=req.project_path,
     )
     db.add(conv)
     await db.commit()
@@ -237,6 +240,8 @@ async def update_conversation(
             conv.title = new_title
     if req.model_config_id is not None:
         conv.model_config_id = req.model_config_id
+    if req.project_path is not None:
+        conv.project_path = req.project_path.strip() or None
 
     await db.commit()
     await db.refresh(conv)
@@ -397,6 +402,9 @@ async def chat_stream(
         if active_skill_code and not conv.skill_code:
             conv.skill_code = active_skill_code
             await db.flush()
+        if req.project_path and not conv.project_path:
+            conv.project_path = req.project_path.strip()
+            await db.flush()
     else:
         title = f"[{active_skill_code}] {pure_content[:18].strip() or '任务'}" if active_skill_code else (req.content[:20].strip() or "新对话")
         conv = Conversation(
@@ -405,6 +413,7 @@ async def chat_stream(
             title=title,
             model_config_id=req.model_config_id,
             skill_code=active_skill_code,
+            project_path=req.project_path.strip() if req.project_path else None,
         )
         db.add(conv)
         await db.flush()
@@ -503,6 +512,8 @@ async def chat_stream(
         else:
             initial_messages = [HumanMessage(content=effective_content)]
 
+        effective_project_path = req.project_path or conv.project_path or os.environ.get("WORKSPACE_PROJECT_PATH") or os.getcwd()
+
         initial_state = {
             "messages": initial_messages,
             "workspace_id": workspace.id,
@@ -511,6 +522,8 @@ async def chat_stream(
             "citations": [],
             "model_config_id": model_config.id,
             "skill_code": active_skill_code,
+            "project_path": effective_project_path,
+            "tool_call_count": 0,
         }
 
         full_content = []
