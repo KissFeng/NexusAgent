@@ -424,30 +424,42 @@ export const CitationsBlock: React.FC<{ citations: Citation[] }> = ({ citations 
   );
 };
 
-// ─── 代码块带语言与一键复制组件 ──────────────────────────────────────────────
+// ─── 代码块与行内 Code 组件 (彻底修复 react-markdown v9+ 行内 code 标签被误判为大代码块的问题) ──
 export const MarkdownCodeBlock: React.FC<{
+  node?: any;
   inline?: boolean;
   className?: string;
   children?: React.ReactNode;
-}> = ({ inline, className, children, ...props }) => {
+  forceBlock?: boolean;
+}> = ({ node: _node, inline: _inline, className, children, forceBlock, ...props }: any) => {
   const [copied, setCopied] = useState(false);
   const match = /language-(\w+)/.exec(className || '');
   const language = match ? match[1] : '';
-  const codeString = String(children).replace(/\n$/, '');
+  const codeString = String(children ?? '').replace(/\n$/, '');
+
+  // react-markdown v9+ 不再向 code 传入 inline 标识
+  // 仅在 pre 组件中通过 forceBlock 强制标识代码块，或显式带 language- 类名、或含多行换行时视为代码块
+  const isBlock = forceBlock || Boolean(className && className.includes('language-')) || /[\r\n]/.test(codeString);
+
+  // 行内高亮小胶囊标签 (对齐图二风格：深色精致小药丸背景、圆角、柔和外框、等宽字体与微边距)
+  if (!isBlock) {
+    return (
+      <code
+        className={`mx-0.5 px-1.5 py-0.5 rounded-md bg-slate-800/90 border border-slate-700/60 font-mono text-[0.875em] text-slate-100 select-text break-words align-baseline inline ${
+          className || ''
+        }`}
+        {...props}
+      >
+        {children}
+      </code>
+    );
+  }
 
   const handleCopy = () => {
     navigator.clipboard.writeText(codeString);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
-
-  if (inline) {
-    return (
-      <code className="px-1.5 py-0.5 rounded bg-slate-800 text-indigo-300 font-mono text-xs border border-slate-700/50" {...props}>
-        {children}
-      </code>
-    );
-  }
 
   return (
     <div className="my-2.5 rounded-xl border border-slate-800 bg-slate-950 overflow-hidden shadow-lg group">
@@ -474,6 +486,13 @@ export const MarkdownCodeBlock: React.FC<{
 // ─── 全套 Markdown 排版与表格美化组件 (彻底解决表格无框线、间距不均) ────────
 export const markdownComponents = {
   code: MarkdownCodeBlock,
+  pre: ({ children }: { children?: React.ReactNode }) => {
+    const child = Array.isArray(children) ? children.find(React.isValidElement) : children;
+    if (React.isValidElement(child) && child.type === MarkdownCodeBlock) {
+      return React.cloneElement(child, { forceBlock: true } as any);
+    }
+    return <>{children}</>;
+  },
   table: ({ children }: any) => (
     <div className="my-3 w-full overflow-x-auto rounded-xl border border-slate-700/80 bg-slate-900/60 shadow-md">
       <table className="min-w-full divide-y divide-slate-700/80 border-collapse text-left text-xs sm:text-sm text-slate-200">
