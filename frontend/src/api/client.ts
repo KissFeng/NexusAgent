@@ -153,6 +153,21 @@ export const api = {
     request<{ message: string }>(`/conversations/${conversationId}`, {
       method: 'DELETE',
     }),
+  updateConversation: (conversationId: string, data: { title?: string; modelConfigId?: string }) =>
+    request<Conversation>(`/conversations/${conversationId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  forkConversation: (conversationId: string, messageId: string, title?: string) =>
+    request<Conversation>(`/conversations/${conversationId}/fork`, {
+      method: 'POST',
+      body: JSON.stringify({ message_id: messageId, title }),
+    }),
+  truncateMessages: (conversationId: string, messageId: string) =>
+    request<{ message: string }>(`/conversations/${conversationId}/truncate`, {
+      method: 'POST',
+      body: JSON.stringify({ message_id: messageId }),
+    }),
 
   // Knowledge Bases
   listKnowledgeBases: () => request<KnowledgeBase[]>('/knowledge-bases'),

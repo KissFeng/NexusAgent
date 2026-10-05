@@ -1,6 +1,7 @@
 import json
 import asyncio
 import time
+import re
 from typing import Annotated, List, Optional, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -17,6 +18,9 @@ from app.models.chat import Conversation, Message
 from app.models.model_provider import ModelConfig
 from app.schemas.chat import (
     ConversationCreateRequest,
+    ConversationUpdateRequest,
+    ConversationForkRequest,
+    MessageTruncateRequest,
     ConversationResponse,
     MessageResponse,
     ChatStreamRequest,
@@ -51,6 +55,14 @@ def extract_message_text(content: Any) -> str:
                     parts.append(str(item["text"]))
         return "".join(parts)
     return ""
+
+def estimate_tokens(text: str) -> int:
+    if not text:
+        return 0
+    chinese_count = len(re.findall(r'[\u4e00-\u9fa5]', text))
+    other_text = re.sub(r'[\u4e00-\u9fa5]', ' ', text)
+    words = len(other_text.split())
+    return max(1, round(chinese_count * 1.3 + words * 1.3))
 
 class ApprovalRequest(BaseModel):
     conversation_id: str
@@ -165,6 +177,156 @@ async def delete_conversation(
     await db.commit()
     return {"message": "会话已删除"}
 
+@router.patch("/conversations/{conversation_id}", response_model=ConversationResponse)
+async def update_conversation(
+    conversation_id: str,
+    req: ConversationUpdateRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    ws_info: Annotated[tuple[Workspace, str], Depends(get_current_workspace)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    workspace, _ = ws_info
+    stmt = select(Conversation).where(
+        Conversation.id == conversation_id,
+        Conversation.workspace_id == workspace.id,
+        Conversation.user_id == user.id,
+    )
+    conv = (await db.execute(stmt)).scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="会话不存在")
+
+    if req.title is not None:
+        new_title = req.title.strip()
+        if new_title:
+            conv.title = new_title
+    if req.model_config_id is not None:
+        conv.model_config_id = req.model_config_id
+
+    await db.commit()
+    await db.refresh(conv)
+    return ConversationResponse.model_validate(conv)
+
+@router.post("/conversations/{conversation_id}/fork", response_model=ConversationResponse)
+async def fork_conversation(
+    conversation_id: str,
+    req: ConversationForkRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    ws_info: Annotated[tuple[Workspace, str], Depends(get_current_workspace)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    workspace, _ = ws_info
+    stmt = select(Conversation).where(
+        Conversation.id == conversation_id,
+        Conversation.workspace_id == workspace.id,
+        Conversation.user_id == user.id,
+    )
+    orig_conv = (await db.execute(stmt)).scalar_one_or_none()
+    if not orig_conv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="原会话不存在")
+
+    msg_stmt = (
+        select(Message)
+        .where(Message.conversation_id == conversation_id)
+        .order_by(Message.created_at.asc())
+    )
+    messages = (await db.execute(msg_stmt)).scalars().all()
+
+    fork_index = -1
+    for i, m in enumerate(messages):
+        if m.id == req.message_id:
+            fork_index = i
+            break
+
+    forked_messages = messages if fork_index == -1 else messages[: fork_index + 1]
+
+    new_title = req.title or f"{orig_conv.title} (分支)"
+    new_conv = Conversation(
+        workspace_id=workspace.id,
+        user_id=user.id,
+        title=new_title,
+        model_config_id=orig_conv.model_config_id,
+    )
+    db.add(new_conv)
+    await db.flush()
+
+    for m in forked_messages:
+        cloned_msg = Message(
+            conversation_id=new_conv.id,
+            role=m.role,
+            content=m.content,
+            model_name=m.model_name,
+            token_count=m.token_count,
+            created_at=m.created_at,
+        )
+        db.add(cloned_msg)
+
+    await db.commit()
+    await db.refresh(new_conv)
+
+    last_content = forked_messages[-1].content if forked_messages else None
+    return ConversationResponse(
+        id=new_conv.id,
+        workspace_id=new_conv.workspace_id,
+        user_id=new_conv.user_id,
+        model_config_id=new_conv.model_config_id,
+        title=new_conv.title,
+        created_at=new_conv.created_at,
+        updated_at=new_conv.updated_at,
+        last_message=last_content[:40] if last_content else None,
+    )
+
+@router.post("/conversations/{conversation_id}/truncate")
+async def truncate_conversation_messages(
+    conversation_id: str,
+    req: MessageTruncateRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    ws_info: Annotated[tuple[Workspace, str], Depends(get_current_workspace)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    workspace, _ = ws_info
+    stmt = select(Conversation).where(
+        Conversation.id == conversation_id,
+        Conversation.workspace_id == workspace.id,
+        Conversation.user_id == user.id,
+    )
+    conv = (await db.execute(stmt)).scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="会话不存在")
+
+    target_msg = (
+        await db.execute(
+            select(Message).where(
+                Message.id == req.message_id,
+                Message.conversation_id == conversation_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+    if not target_msg:
+        return {"message": "消息未找到，跳过截断"}
+
+    msgs_stmt = (
+        select(Message)
+        .where(
+            Message.conversation_id == conversation_id,
+            Message.created_at >= target_msg.created_at,
+        )
+    )
+    msgs_to_del = (await db.execute(msgs_stmt)).scalars().all()
+
+    for m in msgs_to_del:
+        await db.delete(m)
+
+    await db.commit()
+
+    try:
+        from app.agent.graph import agent_checkpointer
+        agent_checkpointer.delete_thread(conversation_id)
+    except Exception:
+        pass
+
+    return {"message": f"成功删除 {len(msgs_to_del)} 条消息"}
+
 @router.post("/chat/stream")
 async def chat_stream(
     req: ChatStreamRequest,
@@ -206,6 +368,7 @@ async def chat_stream(
         conversation_id=conversation_id,
         role="user",
         content=req.content,
+        token_count=estimate_tokens(req.content),
     )
     db.add(user_msg)
     await db.commit()
@@ -256,6 +419,7 @@ async def chat_stream(
                     conversation_id=conversation_id,
                     role="assistant",
                     content=err_msg,
+                    model_name=model_config.name if model_config else None,
                 )
                 session.add(assistant_msg)
                 await session.commit()
@@ -268,8 +432,37 @@ async def chat_stream(
         graph = create_agent_graph(model_config, workspace.id)
         config = {"configurable": {"thread_id": conversation_id}}
 
+        from app.agent.graph import agent_checkpointer
+        existing_checkpoint = agent_checkpointer.get(config)
+
+        if not existing_checkpoint:
+            # 图未加载过历史（例如新创建的分支、服务重启、或编辑截断后），从数据库加载前序所有历史消息
+            async with AsyncSessionLocal() as hist_session:
+                hist_stmt = (
+                    select(Message)
+                    .where(
+                        Message.conversation_id == conversation_id,
+                        Message.id != user_msg.id,
+                    )
+                    .order_by(Message.created_at.asc())
+                )
+                hist_msgs = (await hist_session.execute(hist_stmt)).scalars().all()
+
+                conversation_messages = []
+                for m in hist_msgs:
+                    if m.role == "user":
+                        conversation_messages.append(HumanMessage(content=m.content))
+                    elif m.role == "assistant":
+                        conversation_messages.append(AIMessage(content=m.content))
+                    elif m.role == "system":
+                        conversation_messages.append(SystemMessage(content=m.content))
+                conversation_messages.append(HumanMessage(content=effective_content))
+                initial_messages = conversation_messages
+        else:
+            initial_messages = [HumanMessage(content=effective_content)]
+
         initial_state = {
-            "messages": [HumanMessage(content=effective_content)],
+            "messages": initial_messages,
             "workspace_id": workspace.id,
             "user_id": user.id,
             "kb_ids": None,
@@ -370,6 +563,7 @@ async def chat_stream(
                     conversation_id=conversation_id,
                     role="assistant",
                     content=persisted_content,
+                    model_name=model_config.name if model_config else None,
                 )
                 session.add(assistant_msg)
                 await session.commit()
@@ -488,6 +682,7 @@ async def approve_action(
                     conversation_id=req.conversation_id,
                     role="assistant",
                     content=accumulated_text,
+                    model_name=model_config.name if model_config else None,
                 )
                 session.add(assistant_msg)
                 await session.commit()

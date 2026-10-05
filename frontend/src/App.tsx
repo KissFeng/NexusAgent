@@ -43,6 +43,16 @@ interface StreamingSession {
   controller: AbortController;
 }
 
+const DRAFT_NEW_ID = 'draft-new';
+
+export function estimateTokenCount(text: string): number {
+  if (!text.trim()) return 0;
+  const chineseCount = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
+  const otherPart = text.replace(/[\u4e00-\u9fa5]/g, ' ').trim();
+  const wordCount = otherPart ? otherPart.split(/\s+/).filter(Boolean).length : 0;
+  return Math.max(1, Math.round(chineseCount * 1.3 + wordCount * 1.3));
+}
+
 export default function App() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -109,6 +119,8 @@ export default function App() {
       setActiveMainTab('chat');
       if (secondPart && secondPart !== activeConversationIdRef.current) {
         setActiveConversationId(secondPart);
+      } else if (!secondPart && activeConversationIdRef.current !== DRAFT_NEW_ID) {
+        setActiveConversationId(DRAFT_NEW_ID);
       }
     } else if (firstPart === 'plaza') {
       setActiveMainTab('plaza');
@@ -130,34 +142,32 @@ export default function App() {
     }
   }, [location.pathname]);
 
-  const handleDeleteMessage = (messageId: string) => {
-    if (!activeConversationId) return;
-    setMessagesByConv((prev) => ({
-      ...prev,
-      [activeConversationId]: (prev[activeConversationId] || []).filter((m) => m.id !== messageId),
-    }));
-  };
+  const handleForkAtMessage = async (messageId: string) => {
+    const convId = activeConversationIdRef.current;
+    if (!convId || convId.startsWith('draft-')) return;
+    try {
+      const origConv = conversations.find((c) => c.id === convId);
+      const newConv = await api.forkConversation(
+        convId,
+        messageId,
+        `${origConv?.title || '新对话'} (分支)`
+      );
 
-  const handleForkConversation = (convId: string) => {
-    const origConv = conversations.find((c) => c.id === convId);
-    const draftId = `draft-fork-${Date.now()}`;
-    const newDraft: Conversation = {
-      id: draftId,
-      workspace_id: currentWorkspace?.id || '',
-      user_id: user?.id || '',
-      model_config_id: selectedModelId || undefined,
-      title: `${origConv?.title || '新对话'} (分支)`,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-    setConversations((prev) => [newDraft, ...prev]);
-    setActiveConversationId(draftId);
-    setMessagesByConv((prev) => ({
-      ...prev,
-      [draftId]: [...(prev[convId] || [])],
-    }));
-    setActiveMainTab('chat');
-    navigate(`/chat/${draftId}`);
+      // 拉取新分支完整克隆的历史消息
+      const forkedMsgs = await api.getMessages(newConv.id);
+
+      setConversations((prev) => [newConv, ...prev.filter((c) => c.id !== newConv.id)]);
+      setActiveConversationId(newConv.id);
+      setMessagesByConv((prev) => ({
+        ...prev,
+        [newConv.id]: forkedMsgs,
+      }));
+      setActiveMainTab('chat');
+      navigate(`/chat/${newConv.id}`);
+    } catch (err) {
+      console.error('开启分支对话失败:', err);
+      alert('开启分支对话失败，请重试');
+    }
   };
 
   // 1. Initial auth check
@@ -300,24 +310,34 @@ export default function App() {
   };
 
   const handleNewConversation = () => {
-    const draftId = `draft-${Date.now()}`;
-    const newDraft: Conversation = {
-      id: draftId,
-      workspace_id: currentWorkspace?.id || '',
-      user_id: user?.id || '',
-      model_config_id: selectedModelId || undefined,
-      title: '新对话',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-    setConversations((prev) => [newDraft, ...prev]);
-    setActiveConversationId(draftId);
+    // 幂等：若当前已经处于空白新会话状态，直接返回或确保在 /chat
+    if (activeConversationId === DRAFT_NEW_ID || (!activeConversationId && location.pathname === '/chat')) {
+      setActiveMainTab('chat');
+      navigate('/chat');
+      return;
+    }
+    setActiveConversationId(DRAFT_NEW_ID);
     setMessagesByConv((prev) => ({
       ...prev,
-      [draftId]: [],
+      [DRAFT_NEW_ID]: [],
     }));
     setActiveMainTab('chat');
-    navigate(`/chat/${draftId}`);
+    navigate('/chat');
+  };
+
+  const handleRenameConversation = async (id: string, newTitle: string) => {
+    const trimmed = newTitle.trim();
+    if (!trimmed) return;
+    setConversations((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, title: trimmed } : c))
+    );
+    if (!id.startsWith('draft-')) {
+      try {
+        await api.updateConversation(id, { title: trimmed });
+      } catch (err) {
+        console.error('Failed to rename conversation:', err);
+      }
+    }
   };
 
   const handleDeleteConversation = async (id: string) => {
@@ -368,27 +388,45 @@ export default function App() {
 
   // 5. Send message
   const handleSendMessage = async (content: string) => {
-    if (!content.trim() || !activeConversationId) return;
+    if (!content.trim()) return;
 
-    const convId = activeConversationId;
+    let convId = activeConversationId || DRAFT_NEW_ID;
     let actualConvId = convId;
 
-    if (convId.startsWith('draft-')) {
+    if (!convId || convId.startsWith('draft-')) {
       try {
+        // 自动提取标题：如果是分支草稿，保留已有分支标题；否则根据用户第一句话提炼前 24 个字符
+        let autoTitle = '新对话';
+        const existingConv = conversations.find((c) => c.id === convId);
+        if (existingConv && existingConv.title && existingConv.title !== '新对话') {
+          autoTitle = existingConv.title;
+        } else {
+          // 清洗开头的技能代码 (/xxx) 和多余换行，取第一句话的核心文本
+          const cleanText = content.trim().replace(/^\/[a-zA-Z0-9_-]+\s*/, '').replace(/[\r\n]+/g, ' ').trim();
+          autoTitle = cleanText.slice(0, 24) || content.trim().slice(0, 24) || '新对话';
+        }
+
         const created = await api.createConversation(
-          content.slice(0, 30),
+          autoTitle,
           selectedModelId || undefined
         );
         actualConvId = created.id;
-        setConversations((prev) =>
-          prev.map((c) => (c.id === convId ? created : c))
-        );
+
+        // 若原列表中已有该会话则替换，否则作为新会话插入在最前面（此时左侧正式展示该会话，且名字已改好）
+        setConversations((prev) => {
+          const hasExisting = prev.some((c) => c.id === convId);
+          if (hasExisting) {
+            return prev.map((c) => (c.id === convId ? created : c));
+          }
+          return [created, ...prev];
+        });
+
         setActiveConversationId(actualConvId);
         navigate(`/chat/${actualConvId}`, { replace: true });
         setMessagesByConv((prev) => {
-          const draftMsgs = prev[convId] || [];
+          const draftMsgs = convId ? (prev[convId] || []) : [];
           const next = { ...prev };
-          delete next[convId];
+          if (convId) delete next[convId];
           next[actualConvId] = draftMsgs;
           return next;
         });
@@ -403,7 +441,7 @@ export default function App() {
       conversation_id: actualConvId,
       role: 'user',
       content,
-      token_count: 0,
+      token_count: estimateTokenCount(content),
       created_at: new Date().toISOString(),
     };
 
@@ -536,6 +574,70 @@ export default function App() {
         });
       },
     });
+  };
+
+  // 5.1 Edit and resend message (原地编辑重发)
+  const handleEditAndResendMessage = async (messageId: string, newContent: string) => {
+    if (!activeConversationId) return;
+    const convId = activeConversationId;
+
+    // 1. 若当前会话正在流式，先中止
+    const session = streamingSessions[convId];
+    if (session?.controller) {
+      session.controller.abort();
+    }
+    setStreamingSessions((prev) => {
+      const next = { ...prev };
+      delete next[convId];
+      return next;
+    });
+
+    // 2. 从后端截断该消息及后续问答
+    try {
+      await api.truncateMessages(convId, messageId);
+    } catch (err) {
+      console.error('Failed to truncate on backend:', err);
+    }
+
+    // 3. 从前端移除该消息及后续问答
+    setMessagesByConv((prev) => {
+      const msgs = prev[convId] || [];
+      const idx = msgs.findIndex((m) => m.id === messageId);
+      if (idx >= 0) {
+        return {
+          ...prev,
+          [convId]: msgs.slice(0, idx),
+        };
+      }
+      return prev;
+    });
+
+    // 4. 以新内容重新发送
+    handleSendMessage(newContent);
+  };
+
+  // 5.2 Regenerate message (重新回答)
+  const handleRegenerateMessage = async (messageId: string, modelId?: string) => {
+    if (!activeConversationId) return;
+    const convId = activeConversationId;
+    const msgs = messagesByConv[convId] || [];
+    const idx = msgs.findIndex((m) => m.id === messageId);
+    if (idx < 0) return;
+
+    let prevUserMsg: Message | null = null;
+    for (let i = idx - 1; i >= 0; i--) {
+      if (msgs[i].role === 'user') {
+        prevUserMsg = msgs[i];
+        break;
+      }
+    }
+    if (!prevUserMsg) return;
+
+    if (modelId) {
+      setSelectedModelId(modelId);
+    }
+
+    handleEditAndResendMessage(prevUserMsg.id, prevUserMsg.content);
   };
 
   // 6. Approve action
@@ -683,6 +785,7 @@ export default function App() {
           }}
           onNewConversation={handleNewConversation}
           onDeleteConversation={handleDeleteConversation}
+          onRenameConversation={handleRenameConversation}
           streamingConversationIds={Object.keys(streamingSessions).filter(
             (id) => streamingSessions[id]?.isStreaming
           )}
@@ -734,9 +837,10 @@ export default function App() {
             onNavigateToPlaza={() => navigateToTab('plaza')}
             onNavigateToSettings={() => navigateToTab('settings')}
             onApproveAction={handleApproveAction}
-            onDeleteMessage={handleDeleteMessage}
             onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
-            onForkConversation={handleForkConversation}
+            onForkAtMessage={handleForkAtMessage}
+            onEditAndResendMessage={handleEditAndResendMessage}
+            onRegenerateMessage={handleRegenerateMessage}
           />
         )}
 

@@ -38,18 +38,12 @@ import {
   Paperclip,
   Globe,
   AtSign,
-  Languages,
   RotateCcw,
   SquarePen,
-  Volume2,
-  Trash2,
   PlusSquare,
   PanelLeft,
   SlidersHorizontal,
   GitBranch,
-  ThumbsUp,
-  Bookmark,
-  X,
 } from 'lucide-react';
 
 interface ChatAreaProps {
@@ -79,10 +73,10 @@ interface ChatAreaProps {
   onNavigateToPlaza?: () => void;
   onNavigateToSettings?: () => void;
   onApproveAction: (approved: boolean) => void;
-  onDeleteMessage?: (messageId: string) => void;
   onRegenerateMessage?: (messageId: string, modelId?: string) => void;
+  onEditAndResendMessage?: (messageId: string, newContent: string) => void;
   onToggleSidebar?: () => void;
-  onForkConversation?: (conversationId: string) => void;
+  onForkAtMessage?: (messageId: string) => void;
 }
 
 // ─── 思考过程组件 (Reasoning / Thinking) ───────────────────────────────────
@@ -458,28 +452,51 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onNavigateToPlaza,
   onNavigateToSettings,
   onApproveAction,
-  onDeleteMessage,
   onRegenerateMessage,
+  onEditAndResendMessage,
   onToggleSidebar,
-  onForkConversation,
+  onForkAtMessage,
 }) => {
   const [input, setInput] = useState('');
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [showQuickPanel, setShowQuickPanel] = useState(false);
   const [showParamsModal, setShowParamsModal] = useState(false);
-  const [showSearchModal, setShowSearchModal] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
   const [isWebSearchActive, setIsWebSearchActive] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFileItem[]>([]);
   const [selectedKbIds, setSelectedKbIds] = useState<string[]>([]);
   const [showKbPicker, setShowKbPicker] = useState(false);
   const [showMcpPopup, setShowMcpPopup] = useState(false);
-  const [showTranslatePopupForMsgId, setShowTranslatePopupForMsgId] = useState<string | null>(null);
-  const [showModelPickerForMsgId, setShowModelPickerForMsgId] = useState<string | null>(null);
-  const [likedMessageIds, setLikedMessageIds] = useState<Set<string>>(new Set());
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [expandedCitationId, setExpandedCitationId] = useState<string | null>(null);
   const [selectedSkillIndex, setSelectedSkillIndex] = useState(0);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingContent, setEditingContent] = useState<string>('');
+
+  const handleSaveAndResend = (messageId: string) => {
+    const trimmed = editingContent.trim();
+    if (!trimmed) return;
+    setEditingMessageId(null);
+    if (onEditAndResendMessage) {
+      onEditAndResendMessage(messageId, trimmed);
+    } else {
+      onSendMessage(trimmed);
+    }
+  };
+
+  // 寻找最后一条用户消息 ID (仅在最后一条用户消息展示“编辑”按钮)
+  const lastUserMessageId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') return messages[i].id;
+    }
+    return null;
+  }, [messages]);
+
+  // 寻找最后一条消息是否为 AI 消息 (仅在整个对话最后一条是 AI 回复时展示“重新回答”按钮)
+  const lastAssistantMessageId = useMemo(() => {
+    if (messages.length === 0) return null;
+    const last = messages[messages.length - 1];
+    return last.role === 'assistant' ? last.id : null;
+  }, [messages]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -610,29 +627,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     onSendMessage('请结合上文重新生成回答');
   };
 
-  // 导出单条消息为 Markdown
-  const handleExportMarkdown = (msg: Message) => {
-    const blob = new Blob([msg.content], { type: 'text/markdown;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `message-${msg.id.slice(0, 8)}.md`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
   // 解析当前流式输出的 thinking 和 mainAnswer
   const currentStreamingParsed = useMemo(() => {
     return parseThinkingSegments(streamingContent, streamingThinking);
   }, [streamingContent, streamingThinking]);
-
-  // 过滤用于搜索的消息
-  const filteredMessages = useMemo(() => {
-    if (!searchQuery.trim()) return messages;
-    return messages.filter((m) =>
-      m.content.toLowerCase().includes(searchQuery.toLowerCase())
-    );
-  }, [messages, searchQuery]);
 
   return (
     <div className="flex-1 flex flex-col h-full bg-[#0B0F17] text-slate-100 relative overflow-hidden font-sans">
@@ -733,25 +731,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           )}
         </div>
 
-        {/* 右侧：分支、调参、搜索、广场、设置图标按钮组 */}
+        {/* 右侧：调参、广场、设置图标按钮组 */}
         <div className="flex items-center gap-1.5 text-slate-400">
-          {/* 会话分支 */}
-          <button
-            type="button"
-            onClick={() => {
-              if (currentConversation && onForkConversation) {
-                onForkConversation(currentConversation.id);
-              } else {
-                alert('已从当前消息节点创建对话分支');
-              }
-            }}
-            className="p-1.5 rounded-lg hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
-            title="创建分支会话 (GitBranch)"
-          >
-            <GitBranch className="w-4 h-4" />
-          </button>
-
-          {/* 调参抽屉 */}
+          {/* 模型推理参数调参 (Sliders) */}
           <button
             type="button"
             onClick={() => setShowParamsModal(!showParamsModal)}
@@ -759,16 +741,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             title="模型推理参数调参 (Sliders)"
           >
             <SlidersHorizontal className="w-4 h-4" />
-          </button>
-
-          {/* 搜索消息 */}
-          <button
-            type="button"
-            onClick={() => setShowSearchModal(!showSearchModal)}
-            className="p-1.5 rounded-lg hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
-            title="搜索会话消息"
-          >
-            <Search className="w-4 h-4" />
           </button>
 
           {/* 快捷进入生态广场 */}
@@ -797,36 +769,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           )}
         </div>
       </header>
-
-      {/* 搜索工具条 (展开时展示) */}
-      {showSearchModal && (
-        <div className="px-4 py-2 bg-slate-900 border-b border-slate-800 flex items-center justify-between gap-3 text-xs animate-in fade-in">
-          <div className="flex items-center gap-2 flex-1">
-            <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="在当前对话中检索关键词..."
-              className="bg-transparent flex-1 text-slate-100 placeholder-slate-500 focus:outline-none"
-              autoFocus
-            />
-          </div>
-          <div className="flex items-center gap-2 text-slate-400">
-            <span>找到 {filteredMessages.length} 条</span>
-            <button
-              type="button"
-              onClick={() => {
-                setShowSearchModal(false);
-                setSearchQuery('');
-              }}
-              className="text-slate-500 hover:text-slate-300 cursor-pointer"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* 参数微调模态浮窗 */}
       {showParamsModal && (
@@ -942,7 +884,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         )}
 
         {/* 消息条目渲染 */}
-        {filteredMessages.map((msg, index) => {
+        {messages.map((msg, index) => {
           const isUser = msg.role === 'user';
           const invocation = isUser ? parseSkillInvocation(msg.content) : null;
           const { thinking, mainAnswer } = isUser
@@ -954,42 +896,30 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           const upTokens = Math.max(1, Math.round(totalTokens * 0.95));
           const downTokens = Math.max(1, totalTokens - upTokens);
 
-          const isLiked = likedMessageIds.has(msg.id);
-
-          return (
-            <div
-              key={msg.id}
-              className="w-full max-w-4xl mx-auto py-3 px-4 rounded-xl hover:bg-slate-900/40 transition-colors group"
-            >
-              <div className="flex items-start gap-3.5">
-                {/* 1. 左侧头像 (用户：深蓝靛蓝渐变头像；助手：圆角方形带有“默”或模型首字) */}
-                {isUser ? (
-                  <div className="w-8 h-8 rounded-lg bg-indigo-600 border border-indigo-500/40 flex items-center justify-center shrink-0 text-white shadow-sm shadow-indigo-600/20 overflow-hidden">
+          // 用户消息：靠右对齐展示 (经典气泡布局，移除 Tokens 显示)
+          if (isUser) {
+            return (
+              <div
+                key={msg.id}
+                className="w-full max-w-4xl mx-auto py-2.5 px-4 flex justify-end group"
+              >
+                <div className="flex flex-row-reverse items-start gap-3 max-w-[85%] sm:max-w-[75%]">
+                  {/* 用户头像 (最右侧) */}
+                  <div className="w-8 h-8 rounded-lg bg-indigo-600 border border-indigo-500/40 flex items-center justify-center shrink-0 text-white shadow-sm shadow-indigo-600/20 overflow-hidden mt-0.5">
                     <UserIcon className="w-4.5 h-4.5 text-white" />
                   </div>
-                ) : (
-                  <div className="w-8 h-8 rounded-lg bg-slate-800 border border-slate-700/60 text-indigo-300 font-bold flex items-center justify-center text-xs shrink-0 shadow-sm">
-                    {selectedModel?.name ? selectedModel.name.slice(0, 1) : '默'}
-                  </div>
-                )}
 
-                {/* 2. 右侧主体内容 */}
-                <div className="flex-1 min-w-0 space-y-1">
-                  {/* 第一行：发件人名称 */}
-                  <div className="text-sm font-semibold text-slate-100 leading-snug">
-                    {isUser ? (user?.username || 'Power') : (selectedModel?.name || 'gpt-6.1-sol | New API')}
-                  </div>
+                  {/* 用户内容区域 (靠右排列) */}
+                  <div className="flex flex-col items-end min-w-0">
+                    {/* 发件人与时间 (右对齐) */}
+                    <div className="flex items-center gap-2 mb-1 text-xs text-slate-400">
+                      <span className="font-mono text-[11px] text-slate-500">{formatTimestamp(msg.created_at)}</span>
+                      <span className="font-medium text-slate-300">{user?.username || 'Power'}</span>
+                    </div>
 
-                  {/* 第二行：时间戳 (对齐 Cherry Studio: 10/04 20:16) */}
-                  <div className="text-xs text-slate-500 font-mono">
-                    {formatTimestamp(msg.created_at)}
-                  </div>
-
-                  {/* 第三行：消息正文与各挂载模块 */}
-                  <div className="pt-1.5 space-y-2">
-                    {/* 用户调用的技能徽标 */}
-                    {isUser && invocation && (
-                      <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/10 text-amber-300 border border-amber-500/20 text-xs font-mono">
+                    {/* 用户调用的技能徽标 (右对齐) */}
+                    {invocation && (
+                      <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/10 text-amber-300 border border-amber-500/20 text-xs font-mono mb-1.5">
                         <Zap className="w-3.5 h-3.5 text-amber-400" />
                         <span>/{invocation.code}</span>
                         {invocation.skill && (
@@ -998,13 +928,129 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       </div>
                     )}
 
+                    {/* 用户消息展示区：支持行内编辑或普通气泡 */}
+                    {editingMessageId === msg.id ? (
+                      <div className="w-full min-w-[280px] sm:min-w-[360px] max-w-xl bg-slate-900 border border-indigo-500/60 rounded-2xl p-3 shadow-xl shadow-indigo-950/40 text-left">
+                        <textarea
+                          value={editingContent}
+                          onChange={(e) => setEditingContent(e.target.value)}
+                          onKeyDown={(e) => {
+                            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                              e.preventDefault();
+                              handleSaveAndResend(msg.id);
+                            } else if (e.key === 'Escape') {
+                              e.preventDefault();
+                              setEditingMessageId(null);
+                            }
+                          }}
+                          rows={Math.min(8, Math.max(2, editingContent.split('\n').length))}
+                          className="w-full bg-slate-950/80 border border-slate-800 rounded-lg p-2.5 text-slate-100 text-sm focus:outline-none focus:border-indigo-500 resize-y leading-relaxed"
+                          placeholder="修改您的问题..."
+                          autoFocus
+                        />
+                        <div className="flex items-center justify-end gap-2 mt-2 pt-2 border-t border-slate-800/80">
+                          <button
+                            type="button"
+                            onClick={() => setEditingMessageId(null)}
+                            className="px-3 py-1.5 text-xs rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+                          >
+                            取消
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSaveAndResend(msg.id)}
+                            disabled={!editingContent.trim()}
+                            className="px-3.5 py-1.5 text-xs rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-all cursor-pointer flex items-center gap-1.5 shadow-sm shadow-indigo-600/30 active:scale-95"
+                          >
+                            <ArrowUp className="w-3.5 h-3.5 stroke-[2.5]" />
+                            <span>保存并重新发送</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        {/* 用户消息气泡 (现代深色蓝紫优雅圆角气泡) */}
+                        <div className="rounded-2xl rounded-tr-sm bg-indigo-600/90 text-white px-4 py-2.5 text-sm leading-relaxed shadow-sm break-words select-text text-left">
+                          <div className="whitespace-pre-wrap">
+                            {invocation ? invocation.prompt : msg.content}
+                          </div>
+                        </div>
+
+                        {/* 消息底部操作栏 (复制 + 仅最后一条提问的编辑，右对齐；已彻底删除 Tokens 行) */}
+                        <div className="flex items-center gap-1 pt-1 text-slate-500">
+                          {/* 1. 复制 */}
+                          <button
+                            type="button"
+                            onClick={() => handleCopyText(msg.id, mainAnswer)}
+                            className="p-1 rounded hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+                            title="复制内容"
+                          >
+                            {copiedMessageId === msg.id ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            ) : (
+                              <Copy className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+
+                          {/* 2. 编辑 (仅保留在自己上次输入给AI的对话那条) */}
+                          {msg.id === lastUserMessageId && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingMessageId(msg.id);
+                                setEditingContent(msg.content);
+                              }}
+                              className="p-1 rounded hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+                              title="编辑提问"
+                            >
+                              <SquarePen className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
+          // AI 助手消息：靠左对齐展示 (完整时间线与思考/工具/溯源/Token统计)
+          const assistantModelName = msg.model_name || selectedModel?.name || '默认模型';
+          const assistantInitial = assistantModelName ? assistantModelName.slice(0, 1) : '默';
+
+          return (
+            <div
+              key={msg.id}
+              className="w-full max-w-4xl mx-auto py-3 px-4 rounded-xl hover:bg-slate-900/40 transition-colors group flex justify-start"
+            >
+              <div className="flex items-start gap-3.5 max-w-[90%] sm:max-w-[85%]">
+                {/* 1. 左侧头像 (绑定该条消息生成时使用的 AI 模型) */}
+                <div className="w-8 h-8 rounded-lg bg-slate-800 border border-slate-700/60 text-indigo-300 font-bold flex items-center justify-center text-xs shrink-0 shadow-sm mt-0.5" title={assistantModelName}>
+                  {assistantInitial}
+                </div>
+
+                {/* 2. 右侧主体内容 */}
+                <div className="flex-1 min-w-0 space-y-1">
+                  {/* 第一行：发件人名称 (保持生成该回答时的模型名) */}
+                  <div className="text-sm font-semibold text-slate-100 leading-snug">
+                    {assistantModelName}
+                  </div>
+
+                  {/* 第二行：时间戳 */}
+                  <div className="text-xs text-slate-500 font-mono">
+                    {formatTimestamp(msg.created_at)}
+                  </div>
+
+                  {/* 第三行：思考过程与正文内容 */}
+                  <div className="pt-1.5 space-y-2">
                     {/* 思考过程折叠块 (Assistant) */}
-                    {!isUser && thinking && (
+                    {thinking && (
                       <ReasoningBlock thinking={thinking} defaultOpen={false} />
                     )}
 
                     {/* 工具调用历史 (Assistant) */}
-                    {!isUser && msg.tool_calls && msg.tool_calls.length > 0 && (
+                    {msg.tool_calls && msg.tool_calls.length > 0 && (
                       <div className="space-y-1.5">
                         {msg.tool_calls.map((tc) => (
                           <ToolCallBlock key={tc.tool_id} tool={tc} defaultOpen={false} />
@@ -1012,28 +1058,22 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       </div>
                     )}
 
-                    {/* 消息正文文本 (通透无气泡边界，对齐 Cherry Studio) */}
+                    {/* 消息正文文本 (Markdown 解答) */}
                     <div className="text-sm text-slate-200 leading-relaxed break-words font-normal">
-                      {isUser ? (
-                        <div className="whitespace-pre-wrap select-text">
-                          {invocation ? invocation.prompt : msg.content}
-                        </div>
-                      ) : (
-                        <div className="prose prose-invert prose-sm max-w-none break-words">
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            components={{
-                              code: MarkdownCodeBlock,
-                            }}
-                          >
-                            {mainAnswer}
-                          </ReactMarkdown>
-                        </div>
-                      )}
+                      <div className="prose prose-invert prose-sm max-w-none break-words">
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            code: MarkdownCodeBlock,
+                          }}
+                        >
+                          {mainAnswer}
+                        </ReactMarkdown>
+                      </div>
                     </div>
 
                     {/* 知识库溯源引用 (Assistant) */}
-                    {!isUser && msg.citations && msg.citations.length > 0 && (
+                    {msg.citations && msg.citations.length > 0 && (
                       <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
                         <div className="text-[11px] font-semibold text-indigo-400 flex items-center gap-1 font-mono">
                           <BookOpen className="w-3.5 h-3.5" />
@@ -1073,23 +1113,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       </div>
                     )}
 
-                    {/* 第四行：Token 统计 (对齐 Cherry Studio: Tokens: 1 或 Tokens: 10904 ↑10899 ↓5) */}
+                    {/* 第四行：Token 统计 (仅在 AI 消息保留展示) */}
                     <div className="pt-1 text-[11px] text-slate-500 font-mono select-none">
-                      {isUser ? (
-                        <span>Tokens: {msg.token_count || 1}</span>
-                      ) : (
-                        <span>Tokens: {totalTokens} ↑{upTokens} ↓{downTokens}</span>
-                      )}
+                      <span>Tokens: {totalTokens} ↑{upTokens} ↓{downTokens}</span>
                     </div>
 
-                    {/* 第五行：消息底部操作栏 (对齐 Cherry Studio messageMenuBarActions 真实事件) */}
-                    <div className="flex items-center gap-1.5 pt-1 text-slate-500">
-                      {/* 1. 复制 (Copy) */}
+                    {/* 第五行：消息底部操作栏 */}
+                    <div className="flex items-center gap-1 pt-1 text-slate-500">
+                      {/* 1. 复制 */}
                       <button
                         type="button"
                         onClick={() => handleCopyText(msg.id, mainAnswer)}
                         className="p-1.5 rounded-md hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
-                        title="复制内容 (Copy)"
+                        title="复制内容"
                       >
                         {copiedMessageId === msg.id ? (
                           <Check className="w-3.5 h-3.5 text-emerald-400" />
@@ -1098,174 +1134,27 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                         )}
                       </button>
 
-                      {/* 2. 编辑 (Edit: 将内容填入输入框) */}
+                      {/* 开启分支 (AI 说的每一条话均可开启分支到左侧会话栏继续对话) */}
                       <button
                         type="button"
-                        onClick={() => {
-                          setInput(mainAnswer);
-                          textareaRef.current?.focus();
-                        }}
+                        onClick={() => onForkAtMessage?.(msg.id)}
                         className="p-1.5 rounded-md hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
-                        title="填入输入框编辑 (Edit)"
+                        title="从此处开启分支对话"
                       >
-                        <SquarePen className="w-3.5 h-3.5" />
+                        <GitBranch className="w-3.5 h-3.5" />
                       </button>
 
-                      {/* 如果是 Assistant 消息，提供重新生成、更换模型、翻译、有用反馈 */}
-                      {!isUser && (
-                        <>
-                          {/* 3. 重新生成 (Regenerate: 重新触发回答) */}
-                          <button
-                            type="button"
-                            onClick={() => handleTriggerRegenerate(index)}
-                            className="p-1.5 rounded-md hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
-                            title="重新生成当前回答 (Regenerate)"
-                          >
-                            <RotateCcw className="w-3.5 h-3.5" />
-                          </button>
-
-                          {/* 4. 更换模型重新生成 (Mention Model Picker) */}
-                          <div className="relative">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setShowModelPickerForMsgId(
-                                  showModelPickerForMsgId === msg.id ? null : msg.id
-                                )
-                              }
-                              className="p-1.5 rounded-md hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
-                              title="更换指定模型重新生成"
-                            >
-                              <AtSign className="w-3.5 h-3.5" />
-                            </button>
-                            {showModelPickerForMsgId === msg.id && (
-                              <div className="absolute left-0 bottom-7 w-48 rounded-xl bg-slate-900 border border-slate-800 shadow-2xl py-1 z-50 text-xs">
-                                <div className="px-2.5 py-1 text-[10px] text-slate-400 font-semibold border-b border-slate-800">
-                                  使用指定模型重新生成
-                                </div>
-                                {models.map((m) => (
-                                  <button
-                                    key={m.id}
-                                    type="button"
-                                    onClick={() => {
-                                      setShowModelPickerForMsgId(null);
-                                      handleTriggerRegenerate(index, m.id);
-                                    }}
-                                    className="w-full text-left px-2.5 py-1.5 hover:bg-slate-800 text-slate-300 truncate"
-                                  >
-                                    {m.name}
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-
-                          {/* 5. 翻译 (Translate) */}
-                          <div className="relative">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setShowTranslatePopupForMsgId(
-                                  showTranslatePopupForMsgId === msg.id ? null : msg.id
-                                )
-                              }
-                              className="p-1.5 rounded-md hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
-                              title="翻译为其他语言 (Translate)"
-                            >
-                              <Languages className="w-3.5 h-3.5" />
-                            </button>
-                            {showTranslatePopupForMsgId === msg.id && (
-                              <div className="absolute left-0 bottom-7 w-40 rounded-xl bg-slate-900 border border-slate-800 shadow-2xl py-1 z-50 text-xs">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setShowTranslatePopupForMsgId(null);
-                                    onSendMessage(`请将以下回答翻译为标准英文：\n\n${mainAnswer}`);
-                                  }}
-                                  className="w-full text-left px-2.5 py-1.5 hover:bg-slate-800 text-slate-300"
-                                >
-                                  翻译为英文 (English)
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setShowTranslatePopupForMsgId(null);
-                                    onSendMessage(`请将以下回答翻译为中文：\n\n${mainAnswer}`);
-                                  }}
-                                  className="w-full text-left px-2.5 py-1.5 hover:bg-slate-800 text-slate-300"
-                                >
-                                  翻译为中文 (Chinese)
-                                </button>
-                              </div>
-                            )}
-                          </div>
-
-                          {/* 6. 标记有帮助 (Useful / ThumbsUp) */}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setLikedMessageIds((prev) => {
-                                const next = new Set(prev);
-                                if (next.has(msg.id)) {
-                                  next.delete(msg.id);
-                                } else {
-                                  next.add(msg.id);
-                                }
-                                return next;
-                              });
-                            }}
-                            className={`p-1.5 rounded-md transition-colors cursor-pointer ${
-                              isLiked
-                                ? 'text-indigo-400 bg-indigo-500/10'
-                                : 'hover:text-slate-200 hover:bg-slate-800'
-                            }`}
-                            title={isLiked ? '已标记为采纳回答' : '标记有帮助 (Useful)'}
-                          >
-                            <ThumbsUp className={`w-3.5 h-3.5 ${isLiked ? 'fill-indigo-400' : ''}`} />
-                          </button>
-
-                          {/* 7. 保存到知识库 / 导出 (Notes / Export) */}
-                          <button
-                            type="button"
-                            onClick={() => handleExportMarkdown(msg)}
-                            className="p-1.5 rounded-md hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
-                            title="保存到笔记 / 导出 Markdown (Notes)"
-                          >
-                            <Bookmark className="w-3.5 h-3.5" />
-                          </button>
-                        </>
+                      {/* 3. 重新让 AI 回答 (仅在当前最后一条是 AI 说的且不在流式中时展示) */}
+                      {msg.id === lastAssistantMessageId && !isStreaming && (
+                        <button
+                          type="button"
+                          onClick={() => handleTriggerRegenerate(index)}
+                          className="p-1.5 rounded-md hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+                          title="重新回答"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                        </button>
                       )}
-
-                      {/* 8. 删除 (Delete: 从会话移除该消息) */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (onDeleteMessage) {
-                            onDeleteMessage(msg.id);
-                          } else {
-                            alert('已在当前视图中移除此消息');
-                          }
-                        }}
-                        className="p-1.5 rounded-md hover:text-rose-400 hover:bg-slate-800 transition-colors cursor-pointer"
-                        title="删除该消息 (Delete)"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-
-                      {/* 9. 更多操作 (语音朗读等) */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if ('speechSynthesis' in window) {
-                            const utterance = new SpeechSynthesisUtterance(mainAnswer.slice(0, 300));
-                            window.speechSynthesis.speak(utterance);
-                          }
-                        }}
-                        className="p-1.5 rounded-md hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
-                        title="语音朗读 (TTS)"
-                      >
-                        <Volume2 className="w-3.5 h-3.5" />
-                      </button>
                     </div>
                   </div>
                 </div>
@@ -1759,22 +1648,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 </button>
               </div>
 
-              {/* 右侧动作按钮组: 翻译语言 + 经典圆形发送按钮 (保留统一主题高亮) */}
+              {/* 右侧动作按钮组: 经典圆形发送按钮 (保留统一主题高亮) */}
               <div className="flex items-center gap-2">
-                {/* 文A 翻译快捷切换 */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (input.trim()) {
-                      setInput(`请将以下内容翻译为标准中文：\n${input}`);
-                    }
-                  }}
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
-                  title="快速翻译/润色 (Translate)"
-                >
-                  <Languages className="w-4 h-4" />
-                </button>
-
                 {/* 经典圆形发送按钮 (对齐 Cherry Studio 图二形状，保留系统统一高亮) */}
                 {isStreaming ? (
                   <button

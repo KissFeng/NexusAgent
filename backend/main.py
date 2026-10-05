@@ -15,13 +15,15 @@ from app.api.v1.memories import router as memories_router
 from app.api.v1.schedules import router as schedules_router
 from app.api.v1.governance import router as governance_router
 from app.api.v1.webhooks import router as webhooks_router
+from sqlalchemy import text
 from app.services.scheduler_service import SchedulerService
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 启动时自动初始化数据表
+    # 启动时自动初始化数据表并安全扩充列
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS model_name VARCHAR(255);"))
 
     # 启动定时任务引擎并恢复已有任务
     SchedulerService.start_scheduler()

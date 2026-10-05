@@ -30,6 +30,7 @@ interface SubSidebarProps {
   onSelectConversation: (id: string) => void;
   onNewConversation: () => void;
   onDeleteConversation: (id: string) => void;
+  onRenameConversation?: (id: string, newTitle: string) => void;
   streamingConversationIds?: string[];
 
   // Plaza 相关
@@ -57,6 +58,7 @@ export const SubSidebar: React.FC<SubSidebarProps> = ({
   onSelectConversation,
   onNewConversation,
   onDeleteConversation,
+  onRenameConversation,
   streamingConversationIds = [],
   plazaCategory,
   onSelectPlazaCategory,
@@ -70,10 +72,24 @@ export const SubSidebar: React.FC<SubSidebarProps> = ({
   onSelectSettingsTab,
 }) => {
   const [chatSearch, setChatSearch] = useState('');
+  const [editingConversationId, setEditingConversationId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState('');
+
+  const handleSaveRename = (id: string) => {
+    const trimmed = editingTitle.trim();
+    if (trimmed && onRenameConversation) {
+      onRenameConversation(id, trimmed);
+    }
+    setEditingConversationId(null);
+  };
 
   // 1. 对话子侧边栏
   if (activeMainTab === 'chat') {
-    const filteredConversations = conversations.filter((c) =>
+    // 过滤未发消息的空草稿对话（用户说第一句话前不展示）
+    const visibleConversations = conversations.filter(
+      (c) => !c.id.startsWith('draft-new')
+    );
+    const filteredConversations = visibleConversations.filter((c) =>
       c.title.toLowerCase().includes(chatSearch.toLowerCase())
     );
 
@@ -86,7 +102,7 @@ export const SubSidebar: React.FC<SubSidebarProps> = ({
               {currentWorkspace?.name || '会话列表'}
             </span>
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-mono">
-              {conversations.length}
+              {visibleConversations.length}
             </span>
           </div>
 
@@ -122,18 +138,29 @@ export const SubSidebar: React.FC<SubSidebarProps> = ({
             filteredConversations.map((c) => {
               const isActive = c.id === activeConversationId;
               const isStreaming = streamingConversationIds.includes(c.id);
+              const isEditing = editingConversationId === c.id;
 
               return (
                 <div
                   key={c.id}
-                  onClick={() => onSelectConversation(c.id)}
+                  onClick={() => {
+                    if (!isEditing) {
+                      onSelectConversation(c.id);
+                    }
+                  }}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    setEditingConversationId(c.id);
+                    setEditingTitle(c.title || '新对话');
+                  }}
+                  title={isEditing ? undefined : '双击可重命名'}
                   className={`group relative flex items-center justify-between px-3 py-2.5 rounded-xl text-xs transition-all cursor-pointer ${
                     isActive
                       ? 'bg-indigo-600/20 border border-indigo-500/30 text-white font-medium shadow-sm'
                       : 'text-slate-300 hover:bg-slate-800/60 hover:text-white border border-transparent'
                   }`}
                 >
-                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                  <div className="flex items-center gap-2 min-w-0 flex-1 mr-1">
                     {isStreaming ? (
                       <span className="relative flex h-2 w-2 shrink-0">
                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
@@ -146,19 +173,44 @@ export const SubSidebar: React.FC<SubSidebarProps> = ({
                         }`}
                       />
                     )}
-                    <span className="truncate">{c.title || '新对话'}</span>
+                    {isEditing ? (
+                      <input
+                        type="text"
+                        value={editingTitle}
+                        onChange={(e) => setEditingTitle(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleSaveRename(c.id);
+                          } else if (e.key === 'Escape') {
+                            e.preventDefault();
+                            setEditingConversationId(null);
+                          }
+                        }}
+                        onBlur={() => handleSaveRename(c.id)}
+                        onClick={(e) => e.stopPropagation()}
+                        onDoubleClick={(e) => e.stopPropagation()}
+                        autoFocus
+                        onFocus={(e) => e.target.select()}
+                        className="w-full bg-slate-950 border border-indigo-500/80 rounded px-1.5 py-0.5 text-xs text-white focus:outline-none ring-1 ring-indigo-500/50"
+                      />
+                    ) : (
+                      <span className="truncate">{c.title || '新对话'}</span>
+                    )}
                   </div>
 
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onDeleteConversation(c.id);
-                    }}
-                    className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 text-slate-500 rounded transition-opacity cursor-pointer shrink-0 ml-1"
-                    title="删除会话"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                  {!isEditing && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteConversation(c.id);
+                      }}
+                      className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 text-slate-500 rounded transition-opacity cursor-pointer shrink-0 ml-1"
+                      title="删除会话"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
               );
             })

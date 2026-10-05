@@ -79,6 +79,7 @@ export interface Message {
   pending_approval?: PendingApproval;
   thinking?: string;
   tool_calls?: ToolCallEvent[];
+  model_name?: string;
 }
 
 export interface KnowledgeBase {
