@@ -17,25 +17,47 @@ lib/
 lib64/
 parts/
 sdist/
-var/
 wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.pytest_cache/
 
-# Qdrant data
+# Qdrant local data & storage
 qdrant_data/
 backend/qdrant_data/
 qdrant_storage/
 backend/qdrant_storage/
 
-# Node
+# Node & Frontend
 node_modules/
 frontend/node_modules/
 frontend/dist/
 .pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# Environment
+# Environment & Credentials (严禁提交敏感文件)
 .env
-.env.local
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+*.local
+
+# Logs
+*.log
+logs/
+backend/*.log
+frontend/*.log
+
+# IDE & OS
+.vscode/
+.idea/
 .DS_Store
+Thumbs.db
