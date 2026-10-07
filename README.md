@@ -15,7 +15,7 @@
 [![VectorDB: Qdrant](https://img.shields.io/badge/VectorDB-Qdrant-dc2626.svg)](https://qdrant.tech/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/KissFeng/NexusAgent/pulls)
 
-[ 简体中文 ] | [ English ]
+**简体中文** | [English](./README_EN.md)
 
 ---
 
